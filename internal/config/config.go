@@ -93,6 +93,9 @@ func (c *Config) applyDefaults() {
 	}
 
 	// Cluster defaults
+	if c.Cluster.NodeID == "" && c.Node.NodeID != "" {
+		c.Cluster.NodeID = c.Node.NodeID
+	}
 	if c.Cluster.HeartbeatInterval == 0 {
 		c.Cluster.HeartbeatInterval = 1 * time.Second
 	}

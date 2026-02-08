@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"GoQuorum/internal/common"
 	"GoQuorum/internal/vclock"
 	"bytes"
 	"encoding/binary"
@@ -122,7 +123,7 @@ func encodeSiblingSet(set *SiblingSet) ([]byte, error) {
 // decodeSiblingSet decodes binary format to siblings (Section 5.4)
 func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 	if len(data) < 6 { // Min: 2 (count) + 4 (crc)
-		return nil, ErrCorruptedData
+		return nil, common.ErrCorruptedData
 	}
 
 	// Verify CRC32 (Section 8.1)
@@ -133,7 +134,7 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 
 	if storedCRC != calculatedCRC {
 		return nil, fmt.Errorf("%w: CRC32 mismatch (stored=%08x, calculated=%08x)",
-			ErrCorruptedData, storedCRC, calculatedCRC)
+			common.ErrCorruptedData, storedCRC, calculatedCRC)
 	}
 
 	buf := bytes.NewReader(payload)
@@ -145,11 +146,11 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 	}
 
 	if siblingCount == 0 {
-		return nil, fmt.Errorf("%w: zero sibling count", ErrCorruptedData)
+		return nil, fmt.Errorf("%w: zero sibling count", common.ErrCorruptedData)
 	}
 	if siblingCount > MaxSiblings {
 		return nil, fmt.Errorf("%w: invalid sibling count %d (max: %d)",
-			ErrCorruptedData, siblingCount, MaxSiblings)
+			common.ErrCorruptedData, siblingCount, MaxSiblings)
 	}
 
 	siblings := make([]Sibling, 0, siblingCount)
@@ -163,7 +164,7 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 		}
 
 		if vclockLen == 0 || vclockLen > 10000 { // Sanity check
-			return nil, fmt.Errorf("%w: invalid vclock length %d", ErrCorruptedData, vclockLen)
+			return nil, fmt.Errorf("%w: invalid vclock length %d", common.ErrCorruptedData, vclockLen)
 		}
 
 		// vclock bytes
@@ -198,7 +199,7 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 		// Validate value size (Section 3.1)
 		if valueLen > MaxValueSize {
 			return nil, fmt.Errorf("%w: value too large: %d bytes (max: %d)",
-				ErrCorruptedData, valueLen, MaxValueSize)
+				common.ErrCorruptedData, valueLen, MaxValueSize)
 		}
 
 		// value bytes

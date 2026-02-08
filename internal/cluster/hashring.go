@@ -188,3 +188,15 @@ func (hr *HashRing) Size() int {
 	defer hr.mu.RUnlock()
 	return len(hr.nodes)
 }
+
+// GetAllNodes returns all physical node IDs
+func (hr *HashRing) GetAllNodes() []common.NodeID {
+	hr.mu.RLock()
+	defer hr.mu.RUnlock()
+
+	nodeIDs := make([]common.NodeID, 0, len(hr.nodes))
+	for nodeID := range hr.nodes {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	return nodeIDs
+}

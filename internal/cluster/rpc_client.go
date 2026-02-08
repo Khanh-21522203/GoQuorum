@@ -25,6 +25,9 @@ type RPCClient interface {
 	// SendHeartbeat sends heartbeat to a remote node
 	SendHeartbeat(ctx context.Context, nodeID common.NodeID) error
 
+	// Heartbeat sends heartbeat to a remote node (alias for SendHeartbeat)
+	Heartbeat(ctx context.Context, nodeID common.NodeID) error
+
 	// GetMerkleRoot gets merkle root from a remote node
 	GetMerkleRoot(ctx context.Context, nodeID common.NodeID) ([]byte, error)
 
@@ -135,6 +138,11 @@ func (c *GRPCClient) SendHeartbeat(ctx context.Context, nodeID common.NodeID) er
 
 	// Placeholder - will be implemented when proto is generated
 	return nil
+}
+
+// Heartbeat sends heartbeat to a remote node (alias for SendHeartbeat)
+func (c *GRPCClient) Heartbeat(ctx context.Context, nodeID common.NodeID) error {
+	return c.SendHeartbeat(ctx, nodeID)
 }
 
 // GetMerkleRoot gets merkle root from a remote node

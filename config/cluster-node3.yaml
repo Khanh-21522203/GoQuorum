@@ -1,13 +1,13 @@
-# GoQuorum Configuration - Node 1
+# GoQuorum Configuration - Node 3
 # 3-node cluster configuration
 
 node:
-  node_id: "node1"
-  data_dir: "./data/node1"
+  node_id: "node3"
+  data_dir: "./data/node3"
   log_level: "INFO"
 
 cluster:
-  listen_addr: "0.0.0.0:7070"
+  listen_addr: "0.0.0.0:7072"
   members:
     - id: "node1"
       addr: "localhost:7070"
@@ -60,5 +60,5 @@ connection:
   keepalive_interval: "30s"
 
 server:
-  grpc_addr: ":7070"
-  http_addr: ":8080"
+  grpc_addr: ":7072"
+  http_addr: ":8082"

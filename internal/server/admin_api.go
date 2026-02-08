@@ -136,7 +136,7 @@ func (a *AdminAPI) GetMetrics() (string, error) {
 
 	// Encode to text format
 	var buf bytes.Buffer
-	encoder := expfmt.NewEncoder(&buf, expfmt.NewFormat(expfmt.TypeTextPlain))
+	encoder := expfmt.NewEncoder(&buf, expfmt.FmtText)
 
 	for _, mf := range gathering {
 		if err := encoder.Encode(mf); err != nil {

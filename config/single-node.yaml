@@ -1,5 +1,4 @@
-# GoQuorum Configuration - Node 1
-# 3-node cluster configuration
+# GoQuorum Configuration - Single Node (for testing)
 
 node:
   node_id: "node1"
@@ -11,25 +10,21 @@ cluster:
   members:
     - id: "node1"
       addr: "localhost:7070"
-    - id: "node2"
-      addr: "localhost:7071"
-    - id: "node3"
-      addr: "localhost:7072"
   heartbeat_interval: "1s"
   heartbeat_timeout: "2s"
   failure_threshold: 5
-  bootstrap_timeout: "60s"
+  bootstrap_timeout: "10s"
 
 quorum:
-  n: 3
-  r: 2
-  w: 2
+  n: 1
+  r: 1
+  w: 1
 
 storage:
   sync_writes: true
-  cache_size_mb: 512
-  memtable_mb: 128
-  max_open_files: 2000
+  cache_size_mb: 256
+  memtable_mb: 64
+  max_open_files: 1000
   max_key_size_kb: 64
   max_value_size_mb: 1
   max_siblings: 100
@@ -40,13 +35,13 @@ storage:
   vclock_max_entries: 50
 
 read_repair:
-  enabled: true
+  enabled: false
   async: true
   timeout: "1s"
   probability: 1.0
 
 anti_entropy:
-  enabled: true
+  enabled: false
   scan_interval: "1h"
   exchange_timeout: "30s"
   max_bandwidth: 10485760
@@ -54,7 +49,7 @@ anti_entropy:
   merkle_depth: 10
 
 connection:
-  pool_size: 20
+  pool_size: 10
   idle_timeout: "60s"
   dial_timeout: "5s"
   keepalive_interval: "30s"

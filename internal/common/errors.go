@@ -93,8 +93,9 @@ func (e *QuorumError) String() string {
 }
 
 var (
-	ErrKeyNotFound   = errors.New("key not found")
-	ErrStorageClosed = errors.New("storage is closed")
-	ErrStorageFull   = fmt.Errorf("storage full (disk space exhausted)")
-	ErrStorageIO     = fmt.Errorf("storage I/O error")
+	ErrKeyNotFound     = errors.New("key not found")
+	ErrCorruptedData   = errors.New("data corruption detected")
+	ErrStorageClosed   = errors.New("storage is closed")
+	ErrStorageFull     = fmt.Errorf("storage full (disk space exhausted)")
+	ErrStorageIO       = fmt.Errorf("storage I/O error")
 )

@@ -11,23 +11,23 @@ import (
 
 // ClusterConfig defines static cluster membership (Section 2)
 type ClusterConfig struct {
-	NodeID     common.NodeID  // Unique node identifier (Section 3.1)
-	ListenAddr string         // gRPC listen address (Section 3.2)
-	Members    []MemberConfig // All cluster members (Section 2.2)
+	NodeID     common.NodeID  `yaml:"node_id"`     // Unique node identifier (Section 3.1)
+	ListenAddr string         `yaml:"listen_addr"` // gRPC listen address (Section 3.2)
+	Members    []MemberConfig `yaml:"members"`     // All cluster members (Section 2.2)
 
 	// Heartbeat configuration (Section 4.1)
-	HeartbeatInterval time.Duration // Default: 1s
-	HeartbeatTimeout  time.Duration // Default: 2s
-	FailureThreshold  int           // Default: 5
+	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"` // Default: 1s
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`  // Default: 2s
+	FailureThreshold  int           `yaml:"failure_threshold"`  // Default: 5
 
 	// Bootstrap configuration (Section 5)
-	BootstrapTimeout time.Duration // Default: 60s
+	BootstrapTimeout time.Duration `yaml:"bootstrap_timeout"` // Default: 60s
 }
 
 // MemberConfig defines a cluster member (Section 2.2)
 type MemberConfig struct {
-	ID   common.NodeID // Unique identifier
-	Addr string        // <host>:<port> format
+	ID   common.NodeID `yaml:"id"`   // Unique identifier
+	Addr string        `yaml:"addr"` // <host>:<port> format
 }
 
 // DefaultClusterConfig returns default configuration

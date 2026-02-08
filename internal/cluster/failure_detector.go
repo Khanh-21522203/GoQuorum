@@ -31,7 +31,8 @@ func NewFailureDetector(
 
 	return &FailureDetector{
 		config:     config,
-		membership: membership, // Add this field
+		peers:      make(map[common.NodeID]*common.NodeHealth),
+		membership: membership,
 		rpc:        rpc,
 		metrics:    NewFailureDetectorMetrics(),
 		stopCh:     make(chan struct{}),

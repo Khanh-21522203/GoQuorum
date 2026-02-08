@@ -3,18 +3,18 @@
 
 node:
   node_id: "node2"
-  data_dir: "/var/lib/goquorum/data"
+  data_dir: "./data/node2"
   log_level: "INFO"
 
 cluster:
-  listen_addr: "0.0.0.0:7070"
+  listen_addr: "0.0.0.0:7071"
   members:
     - id: "node1"
-      addr: "node1:7070"
+      addr: "localhost:7070"
     - id: "node2"
-      addr: "node2:7070"
+      addr: "localhost:7071"
     - id: "node3"
-      addr: "node3:7070"
+      addr: "localhost:7072"
   heartbeat_interval: "1s"
   heartbeat_timeout: "2s"
   failure_threshold: 5
@@ -60,5 +60,5 @@ connection:
   keepalive_interval: "30s"
 
 server:
-  grpc_addr: ":7070"
-  http_addr: ":8080"
+  grpc_addr: ":7071"
+  http_addr: ":8081"
