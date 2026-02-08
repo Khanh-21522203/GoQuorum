@@ -1,0 +1,60 @@
+# GoQuorum Configuration
+# Development/Single-node configuration
+
+node:
+  node_id: "node1"
+  data_dir: "./data"
+  log_level: "INFO"
+
+cluster:
+  listen_addr: "0.0.0.0:7070"
+  members:
+    - id: "node1"
+      addr: "localhost:7070"
+  heartbeat_interval: "1s"
+  heartbeat_timeout: "2s"
+  failure_threshold: 5
+  bootstrap_timeout: "60s"
+
+quorum:
+  n: 1
+  r: 1
+  w: 1
+
+storage:
+  sync_writes: true
+  cache_size_mb: 256
+  memtable_mb: 64
+  max_open_files: 1000
+  max_key_size_kb: 64
+  max_value_size_mb: 1
+  max_siblings: 100
+  tombstone_gc_enabled: true
+  tombstone_ttl_days: 7
+  tombstone_gc_interval: "1h"
+  vclock_prune_days: 7
+  vclock_max_entries: 50
+
+read_repair:
+  enabled: true
+  async: true
+  timeout: "1s"
+  probability: 1.0
+
+anti_entropy:
+  enabled: true
+  scan_interval: "1h"
+  exchange_timeout: "30s"
+  max_bandwidth: 10485760  # 10MB/s
+  parallelism: 1
+  merkle_depth: 10
+
+connection:
+  pool_size: 10
+  idle_timeout: "60s"
+  dial_timeout: "5s"
+  keepalive_interval: "30s"
+
+server:
+  grpc_addr: ":7070"
+  http_addr: ":8080"

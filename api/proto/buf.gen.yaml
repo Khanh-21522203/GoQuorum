@@ -1,0 +1,20 @@
+version: v1
+plugins:
+  # Generate Go code
+  - plugin: buf.build/protocolbuffers/go
+    out: ../v1
+    opt:
+      - paths=source_relative
+
+  # Generate gRPC Go code
+  - plugin: buf.build/grpc/go
+    out: ../v1
+    opt:
+      - paths=source_relative
+
+  # Generate grpc-gateway code
+  - plugin: buf.build/grpc-ecosystem/gateway
+    out: ../v1
+    opt:
+      - paths=source_relative
+      - generate_unbound_methods=true

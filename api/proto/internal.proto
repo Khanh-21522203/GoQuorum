@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package goquorum.internal.v1;
+
+option go_package = "GoQuorum/api/internal/v1;internalv1";
+
+// ============================================================================
+// Internal Service - Node-to-node communication
+// ============================================================================
+
+service GoQuorumInternal {
+  // Replicate is used by coordinator to replicate writes to other nodes
+  rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+
+  // Read is used by coordinator to read from replicas
+  rpc Read(InternalReadRequest) returns (InternalReadResponse);
+
+  // Heartbeat is used for failure detection between nodes
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // AntiEntropyExchange is used for background replica synchronization
+  rpc AntiEntropyExchange(AntiEntropyRequest) returns (AntiEntropyResponse);
+
+  // GetMerkleRoot returns the Merkle tree root hash
+  rpc GetMerkleRoot(GetMerkleRootRequest) returns (GetMerkleRootResponse);
+}
+
+// ============================================================================
+// Replicate Messages
+// ============================================================================
+
+message ReplicateRequest {
+  bytes key = 1;
+  SiblingData sibling = 2;        // Value and context to write
+  string coordinator_id = 3;      // Originating coordinator
+  int64 request_id = 4;           // For deduplication
+}
+
+message SiblingData {
+  bytes value = 1;
+  repeated ContextEntry context = 2;
+  bool tombstone = 3;
+  int64 timestamp = 4;
+}
+
+message ContextEntry {
+  string node_id = 1;
+  uint64 counter = 2;
+}
+
+message ReplicateResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================================
+// Internal Read Messages
+// ============================================================================
+
+message InternalReadRequest {
+  bytes key = 1;
+  string coordinator_id = 2;
+}
+
+message InternalReadResponse {
+  repeated SiblingData siblings = 1;
+  bool found = 2;
+}
+
+// ============================================================================
+// Heartbeat Messages
+// ============================================================================
+
+message HeartbeatRequest {
+  string sender_id = 1;
+  int64 timestamp = 2;
+  string version = 3;
+  NodeStatus status = 4;
+}
+
+message HeartbeatResponse {
+  string responder_id = 1;
+  int64 timestamp = 2;
+  NodeStatus status = 3;
+  repeated PeerStatusInfo peers = 4;
+}
+
+enum NodeStatus {
+  NODE_UNKNOWN = 0;
+  NODE_JOINING = 1;
+  NODE_ACTIVE = 2;
+  NODE_LEAVING = 3;
+}
+
+message PeerStatusInfo {
+  string node_id = 1;
+  NodeStatus status = 2;
+  int64 last_seen = 3;
+}
+
+// ============================================================================
+// Anti-Entropy Messages
+// ============================================================================
+
+message AntiEntropyRequest {
+  string sender_id = 1;
+  bytes range_start = 2;          // Key range start (inclusive)
+  bytes range_end = 3;            // Key range end (exclusive)
+  bytes merkle_root = 4;          // Merkle tree root hash
+  AntiEntropyPhase phase = 5;
+  repeated bytes tree_hashes = 6; // For tree traversal
+  int32 level = 7;                // Current tree level
+}
+
+message AntiEntropyResponse {
+  bool in_sync = 1;
+  bytes merkle_root = 2;
+  repeated bytes tree_hashes = 3;
+  repeated KeyVersion keys = 4;   // Keys in differing ranges
+}
+
+message KeyVersion {
+  bytes key = 1;
+  repeated ContextEntry context = 2;
+  int64 timestamp = 3;
+  bytes value = 4;
+  bool tombstone = 5;
+}
+
+enum AntiEntropyPhase {
+  COMPARE_ROOT = 0;
+  COMPARE_LEVEL = 1;
+  EXCHANGE_KEYS = 2;
+}
+
+// ============================================================================
+// Merkle Tree Messages
+// ============================================================================
+
+message GetMerkleRootRequest {
+  string sender_id = 1;
+}
+
+message GetMerkleRootResponse {
+  bytes merkle_root = 1;
+}

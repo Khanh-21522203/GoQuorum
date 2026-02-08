@@ -1,0 +1,247 @@
+syntax = "proto3";
+
+package goquorum.v1;
+
+option go_package = "GoQuorum/api/v1;v1";
+
+import "google/api/annotations.proto";
+
+// ============================================================================
+// Client Service - Data operations
+// ============================================================================
+
+service GoQuorum {
+  // Get retrieves value(s) for a key
+  rpc Get(GetRequest) returns (GetResponse) {
+    option (google.api.http) = {
+      get: "/v1/keys/{key}"
+    };
+  }
+
+  // Put stores a value for a key
+  rpc Put(PutRequest) returns (PutResponse) {
+    option (google.api.http) = {
+      put: "/v1/keys/{key}"
+      body: "*"
+    };
+  }
+
+  // Delete removes a key by writing a tombstone
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/keys/{key}"
+    };
+  }
+}
+
+// ============================================================================
+// Admin Service - Operations and debugging
+// ============================================================================
+
+service GoQuorumAdmin {
+  // Health returns node health status
+  rpc Health(HealthRequest) returns (HealthResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/health"
+    };
+  }
+
+  // ClusterInfo returns cluster membership and status
+  rpc ClusterInfo(ClusterInfoRequest) returns (ClusterInfoResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/cluster"
+    };
+  }
+
+  // GetMetrics returns Prometheus-format metrics
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/metrics"
+    };
+  }
+
+  // KeyInfo returns detailed information about a specific key
+  rpc KeyInfo(KeyInfoRequest) returns (KeyInfoResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/keys/{key}"
+    };
+  }
+
+  // TriggerCompaction manually triggers Pebble compaction
+  rpc TriggerCompaction(TriggerCompactionRequest) returns (TriggerCompactionResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/compaction"
+    };
+  }
+}
+
+// ============================================================================
+// Client API Messages
+// ============================================================================
+
+message GetRequest {
+  bytes key = 1;              // Required: key to retrieve (1-64KB)
+  GetOptions options = 2;     // Optional: read options
+}
+
+message GetOptions {
+  uint32 r = 1;               // Read quorum override (0 = use default)
+  uint32 timeout_ms = 2;      // Request timeout override (0 = use default)
+}
+
+message GetResponse {
+  repeated Sibling siblings = 1;  // One or more values (multiple = conflict)
+}
+
+message Sibling {
+  bytes value = 1;            // Value bytes (empty if tombstone)
+  Context context = 2;        // Causal context (vector clock)
+  bool tombstone = 3;         // True if this is a tombstone
+  int64 timestamp = 4;        // Write timestamp (Unix nanos)
+}
+
+message Context {
+  repeated ContextEntry entries = 1;
+}
+
+message ContextEntry {
+  string node_id = 1;
+  uint64 counter = 2;
+}
+
+message PutRequest {
+  bytes key = 1;              // Required: key (1-64KB)
+  bytes value = 2;            // Required: value (0-1MB)
+  Context context = 3;        // Optional: context from previous read
+  PutOptions options = 4;     // Optional: write options
+}
+
+message PutOptions {
+  uint32 w = 1;               // Write quorum override (0 = use default)
+  uint32 timeout_ms = 2;      // Request timeout override
+}
+
+message PutResponse {
+  Context context = 1;        // New context after write
+}
+
+message DeleteRequest {
+  bytes key = 1;              // Required: key to delete
+  Context context = 2;        // Required: context from previous read
+  DeleteOptions options = 3;  // Optional: delete options
+}
+
+message DeleteOptions {
+  uint32 w = 1;               // Write quorum override
+  uint32 timeout_ms = 2;      // Request timeout override
+}
+
+message DeleteResponse {
+  // Empty on success
+}
+
+// ============================================================================
+// Admin API Messages
+// ============================================================================
+
+message HealthRequest {
+  // Empty
+}
+
+message HealthResponse {
+  HealthStatus status = 1;
+  string node_id = 2;
+  int64 uptime_seconds = 3;
+  string version = 4;
+  map<string, CheckResult> checks = 5;
+}
+
+enum HealthStatus {
+  HEALTH_UNKNOWN = 0;
+  HEALTH_HEALTHY = 1;
+  HEALTH_DEGRADED = 2;
+  HEALTH_UNHEALTHY = 3;
+}
+
+message CheckResult {
+  string status = 1;
+  int64 latency_ms = 2;
+  string error = 3;
+  int32 peers_active = 4;
+  int32 peers_total = 5;
+  int64 free_bytes = 6;
+  int64 total_bytes = 7;
+}
+
+message ClusterInfoRequest {
+  // Empty
+}
+
+message ClusterInfoResponse {
+  string node_id = 1;
+  repeated PeerInfo peers = 2;
+  ClusterStatus cluster_status = 3;
+}
+
+message PeerInfo {
+  string node_id = 1;
+  string address = 2;
+  PeerStatus status = 3;
+  int64 last_seen_unix = 4;
+  int64 latency_ms = 5;
+}
+
+enum PeerStatus {
+  PEER_UNKNOWN = 0;
+  PEER_ACTIVE = 1;
+  PEER_SUSPECT = 2;
+  PEER_FAILED = 3;
+}
+
+enum ClusterStatus {
+  CLUSTER_UNKNOWN = 0;
+  CLUSTER_HEALTHY = 1;
+  CLUSTER_DEGRADED = 2;
+  CLUSTER_CRITICAL = 3;
+}
+
+message GetMetricsRequest {
+  // Empty
+}
+
+message GetMetricsResponse {
+  string metrics = 1;  // Prometheus exposition format
+}
+
+message KeyInfoRequest {
+  bytes key = 1;
+}
+
+message KeyInfoResponse {
+  bytes key = 1;
+  repeated ReplicaKeyInfo replicas = 2;
+  repeated string preference_list = 3;
+}
+
+message ReplicaKeyInfo {
+  string node_id = 1;
+  bool has_key = 2;
+  repeated SiblingInfo siblings = 3;
+  string error = 4;
+}
+
+message SiblingInfo {
+  Context context = 1;
+  int64 timestamp = 2;
+  uint32 value_size = 3;
+  bool tombstone = 4;
+}
+
+message TriggerCompactionRequest {
+  // Empty
+}
+
+message TriggerCompactionResponse {
+  bool started = 1;
+  string message = 2;
+}

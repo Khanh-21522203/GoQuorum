@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  node1:
+    build: .
+    container_name: goquorum-node1
+    hostname: node1
+    ports:
+      - "7071:7070"
+      - "8081:8080"
+    volumes:
+      - node1-data:/var/lib/goquorum
+      - ./config/cluster-node1.yaml:/etc/goquorum/config.yaml:ro
+    environment:
+      - GOQUORUM_NODE_ID=node1
+    networks:
+      - goquorum-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node2:
+    build: .
+    container_name: goquorum-node2
+    hostname: node2
+    ports:
+      - "7072:7070"
+      - "8082:8080"
+    volumes:
+      - node2-data:/var/lib/goquorum
+      - ./config/cluster-node2.yaml:/etc/goquorum/config.yaml:ro
+    environment:
+      - GOQUORUM_NODE_ID=node2
+    networks:
+      - goquorum-net
+    depends_on:
+      - node1
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node3:
+    build: .
+    container_name: goquorum-node3
+    hostname: node3
+    ports:
+      - "7073:7070"
+      - "8083:8080"
+    volumes:
+      - node3-data:/var/lib/goquorum
+      - ./config/cluster-node3.yaml:/etc/goquorum/config.yaml:ro
+    environment:
+      - GOQUORUM_NODE_ID=node3
+    networks:
+      - goquorum-net
+    depends_on:
+      - node1
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: goquorum-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - goquorum-net
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: goquorum-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - goquorum-net
+    depends_on:
+      - prometheus
+
+networks:
+  goquorum-net:
+    driver: bridge
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  prometheus-data:
+  grafana-data:
