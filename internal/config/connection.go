@@ -17,6 +17,9 @@ type ConnectionConfig struct {
 	ReconnectMax         time.Duration // Max delay (default: 30s)
 	ReconnectFactor      float64       // Backoff factor (default: 2.0)
 	MaxReconnectAttempts int           // Max attempts (default: 10)
+
+	// TLS configuration for inter-node HTTP connections
+	TLS TLSConfig
 }
 
 // DefaultConnectionConfig returns default connection configuration

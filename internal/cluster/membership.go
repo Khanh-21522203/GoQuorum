@@ -34,7 +34,8 @@ type LocalMetadata struct {
 // PeerMetadata tracks peer information (Section 3.3)
 type PeerMetadata struct {
 	NodeID      common.NodeID
-	Addr        string
+	Addr        string // gRPC address
+	HTTPAddr    string // HTTP address for internal RPC
 	Status      NodeStatus
 	LastSeen    time.Time
 	MissedCount int
@@ -91,6 +92,7 @@ func NewMembershipManager(cfg config.ClusterConfig, version string) *MembershipM
 		mm.peers[member.ID] = &PeerMetadata{
 			NodeID:      member.ID,
 			Addr:        member.Addr,
+			HTTPAddr:    member.HTTPAddr,
 			Status:      NodeStatusUnknown,
 			LastSeen:    time.Time{},
 			MissedCount: 0,
@@ -269,6 +271,30 @@ func (mm *MembershipManager) HasQuorum() bool {
 	return activeCount >= quorumSize
 }
 
+// ActivateIfQuorum atomically checks quorum and transitions local status to
+// ACTIVE if quorum is reached. Returns true if the transition was performed.
+// This prevents a TOCTOU race between HasQuorum() + SetLocalStatus().
+func (mm *MembershipManager) ActivateIfQuorum() bool {
+	mm.mu.Lock()
+	defer mm.mu.Unlock()
+
+	activeCount := 1 // Include self
+	for _, peer := range mm.peers {
+		if peer.Status == NodeStatusActive {
+			activeCount++
+		}
+	}
+
+	if activeCount < mm.config.QuorumSize() {
+		return false
+	}
+
+	if mm.localMeta.Status != NodeStatusActive {
+		mm.localMeta.Status = NodeStatusActive
+	}
+	return true
+}
+
 // GetClusterView returns current cluster view (Section 9.2)
 func (mm *MembershipManager) GetClusterView() map[common.NodeID]NodeStatus {
 	mm.mu.RLock()
@@ -338,7 +364,7 @@ func (mm *MembershipManager) GetAllNodes() []common.NodeID {
 	return nodes
 }
 
-// GetAddress returns address for a node
+// GetAddress returns the gRPC address for a node
 func (mm *MembershipManager) GetAddress(nodeID common.NodeID) string {
 	mm.mu.RLock()
 	defer mm.mu.RUnlock()
@@ -350,6 +376,17 @@ func (mm *MembershipManager) GetAddress(nodeID common.NodeID) string {
 
 	if peer, exists := mm.peers[nodeID]; exists {
 		return peer.Addr
+	}
+	return ""
+}
+
+// GetHTTPAddress returns the HTTP address for a node (used for internal RPC).
+func (mm *MembershipManager) GetHTTPAddress(nodeID common.NodeID) string {
+	mm.mu.RLock()
+	defer mm.mu.RUnlock()
+
+	if peer, exists := mm.peers[nodeID]; exists {
+		return peer.HTTPAddr
 	}
 	return ""
 }

@@ -31,9 +31,9 @@ type RingDebugInfo struct {
 
 // NodeRingInfo represents a node's hash ring information
 type NodeRingInfo struct {
-	NodeID       string  `json:"node_id"`
-	VNodes       int     `json:"vnodes"`
-	KeyRangePct  float64 `json:"key_range_pct"`
+	NodeID      string  `json:"node_id"`
+	VNodes      int     `json:"vnodes"`
+	KeyRangePct float64 `json:"key_range_pct"`
 }
 
 // handleDebugCluster handles GET /debug/cluster
@@ -73,20 +73,25 @@ func (s *Server) handleDebugRing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	vnodesPerNode := 256
+	if s.ring != nil {
+		vnodesPerNode = s.ring.VNodeCount()
+	}
+
 	info := RingDebugInfo{
-		VNodesPerNode: 256,
+		VNodesPerNode: vnodesPerNode,
 		TotalVNodes:   0,
 		Nodes:         []NodeRingInfo{},
 	}
 
 	if s.membership != nil {
 		nodes := s.membership.GetAllNodes()
-		info.TotalVNodes = len(nodes) * 256
-		
+		info.TotalVNodes = len(nodes) * vnodesPerNode
+
 		for _, nodeID := range nodes {
 			nodeInfo := NodeRingInfo{
 				NodeID:      string(nodeID),
-				VNodes:      256,
+				VNodes:      vnodesPerNode,
 				KeyRangePct: 100.0 / float64(len(nodes)),
 			}
 			info.Nodes = append(info.Nodes, nodeInfo)

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package goquorum.v1;
 
-option go_package = "GoQuorum/api/v1;v1";
+option go_package = "GoQuorum/api;v1";
 
 import "google/api/annotations.proto";
 
@@ -30,6 +30,22 @@ service GoQuorum {
   rpc Delete(DeleteRequest) returns (DeleteResponse) {
     option (google.api.http) = {
       delete: "/v1/keys/{key}"
+    };
+  }
+
+  // BatchGet retrieves values for multiple keys
+  rpc BatchGet(BatchGetRequest) returns (BatchGetResponse) {
+    option (google.api.http) = {
+      post: "/v1/batch/get"
+      body: "*"
+    };
+  }
+
+  // BatchPut stores multiple key-value pairs
+  rpc BatchPut(BatchPutRequest) returns (BatchPutResponse) {
+    option (google.api.http) = {
+      post: "/v1/batch/put"
+      body: "*"
     };
   }
 }
@@ -119,6 +135,7 @@ message PutRequest {
 message PutOptions {
   uint32 w = 1;               // Write quorum override (0 = use default)
   uint32 timeout_ms = 2;      // Request timeout override
+  int64 ttl_seconds = 3;      // Key TTL in seconds (0 = no expiry)
 }
 
 message PutResponse {
@@ -138,6 +155,42 @@ message DeleteOptions {
 
 message DeleteResponse {
   // Empty on success
+}
+
+message BatchGetRequest {
+  repeated bytes keys = 1;
+  GetOptions options = 2;
+}
+
+message BatchGetResponse {
+  repeated BatchGetResult results = 1;
+}
+
+message BatchGetResult {
+  bytes key = 1;
+  repeated Sibling siblings = 2;
+  string error = 3;  // empty if success
+}
+
+message BatchPutRequest {
+  repeated BatchPutItem items = 1;
+  PutOptions options = 2;
+}
+
+message BatchPutItem {
+  bytes key = 1;
+  bytes value = 2;
+  Context context = 3;
+}
+
+message BatchPutResponse {
+  repeated BatchPutResult results = 1;
+}
+
+message BatchPutResult {
+  bytes key = 1;
+  Context context = 2;  // new context after write
+  string error = 3;     // empty if success
 }
 
 // ============================================================================

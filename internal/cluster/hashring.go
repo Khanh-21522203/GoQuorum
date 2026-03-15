@@ -146,6 +146,44 @@ func (hr *HashRing) GetPreferenceList(key string, N int) ([]common.NodeID, error
 	return result, nil
 }
 
+// GetExtendedPreferenceList returns up to N+extra distinct nodes for sloppy quorum.
+// The first N nodes are the strict preference list; additional nodes are overflow candidates.
+func (hr *HashRing) GetExtendedPreferenceList(key string, N, extra int) ([]common.NodeID, error) {
+	hr.mu.RLock()
+	defer hr.mu.RUnlock()
+
+	if len(hr.nodes) == 0 {
+		return nil, ErrEmptyRing
+	}
+
+	want := N + extra
+	if want > len(hr.nodes) {
+		want = len(hr.nodes)
+	}
+
+	keyHash := xxhash.Sum64String(key)
+	idx := sort.Search(len(hr.vnodes), func(i int) bool {
+		return hr.vnodes[i].Hash >= keyHash
+	})
+	if idx >= len(hr.vnodes) {
+		idx = 0
+	}
+
+	result := make([]common.NodeID, 0, want)
+	seen := make(map[common.NodeID]struct{}, want)
+
+	for i := 0; len(result) < want && i < len(hr.vnodes); i++ {
+		vnodeIdx := (idx + i) % len(hr.vnodes)
+		nodeID := hr.vnodes[vnodeIdx].NodeID
+		if _, exists := seen[nodeID]; !exists {
+			result = append(result, nodeID)
+			seen[nodeID] = struct{}{}
+		}
+	}
+
+	return result, nil
+}
+
 // GetPrimaryNode returns the primary replica node for a key
 func (hr *HashRing) GetPrimaryNode(key string) (common.NodeID, error) {
 	nodes, err := hr.GetPreferenceList(key, 1)
@@ -187,6 +225,11 @@ func (hr *HashRing) Size() int {
 	hr.mu.RLock()
 	defer hr.mu.RUnlock()
 	return len(hr.nodes)
+}
+
+// VNodeCount returns the number of virtual nodes per physical node
+func (hr *HashRing) VNodeCount() int {
+	return hr.vnodeCount
 }
 
 // GetAllNodes returns all physical node IDs

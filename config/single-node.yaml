@@ -10,6 +10,7 @@ cluster:
   members:
     - id: "node1"
       addr: "localhost:7070"
+      http_addr: "localhost:8080"
   heartbeat_interval: "1s"
   heartbeat_timeout: "2s"
   failure_threshold: 5

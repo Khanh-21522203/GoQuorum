@@ -11,10 +11,13 @@ cluster:
   members:
     - id: "node1"
       addr: "localhost:7070"
+      http_addr: "localhost:8080"
     - id: "node2"
       addr: "localhost:7071"
+      http_addr: "localhost:8081"
     - id: "node3"
       addr: "localhost:7072"
+      http_addr: "localhost:8082"
   heartbeat_interval: "1s"
   heartbeat_timeout: "2s"
   failure_threshold: 5

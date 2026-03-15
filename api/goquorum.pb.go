@@ -560,8 +560,9 @@ func (x *PutRequest) GetOptions() *PutOptions {
 
 type PutOptions struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	W             uint32                 `protobuf:"varint,1,opt,name=w,proto3" json:"w,omitempty"`                                  // Write quorum override (0 = use default)
-	TimeoutMs     uint32                 `protobuf:"varint,2,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"` // Request timeout override
+	W             uint32                 `protobuf:"varint,1,opt,name=w,proto3" json:"w,omitempty"`                                     // Write quorum override (0 = use default)
+	TimeoutMs     uint32                 `protobuf:"varint,2,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`    // Request timeout override
+	TtlSeconds    int64                  `protobuf:"varint,3,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"` // Key TTL in seconds (0 = no expiry)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -606,6 +607,13 @@ func (x *PutOptions) GetW() uint32 {
 func (x *PutOptions) GetTimeoutMs() uint32 {
 	if x != nil {
 		return x.TimeoutMs
+	}
+	return 0
+}
+
+func (x *PutOptions) GetTtlSeconds() int64 {
+	if x != nil {
+		return x.TtlSeconds
 	}
 	return 0
 }
@@ -802,6 +810,378 @@ func (*DeleteResponse) Descriptor() ([]byte, []int) {
 	return file_goquorum_proto_rawDescGZIP(), []int{11}
 }
 
+type BatchGetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          [][]byte               `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	Options       *GetOptions            `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetRequest) Reset() {
+	*x = BatchGetRequest{}
+	mi := &file_goquorum_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetRequest) ProtoMessage() {}
+
+func (x *BatchGetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetRequest.ProtoReflect.Descriptor instead.
+func (*BatchGetRequest) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *BatchGetRequest) GetKeys() [][]byte {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *BatchGetRequest) GetOptions() *GetOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+type BatchGetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Results       []*BatchGetResult      `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetResponse) Reset() {
+	*x = BatchGetResponse{}
+	mi := &file_goquorum_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetResponse) ProtoMessage() {}
+
+func (x *BatchGetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetResponse.ProtoReflect.Descriptor instead.
+func (*BatchGetResponse) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *BatchGetResponse) GetResults() []*BatchGetResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+type BatchGetResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Siblings      []*Sibling             `protobuf:"bytes,2,rep,name=siblings,proto3" json:"siblings,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"` // empty if success
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetResult) Reset() {
+	*x = BatchGetResult{}
+	mi := &file_goquorum_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetResult) ProtoMessage() {}
+
+func (x *BatchGetResult) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetResult.ProtoReflect.Descriptor instead.
+func (*BatchGetResult) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BatchGetResult) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *BatchGetResult) GetSiblings() []*Sibling {
+	if x != nil {
+		return x.Siblings
+	}
+	return nil
+}
+
+func (x *BatchGetResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type BatchPutRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*BatchPutItem        `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	Options       *PutOptions            `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchPutRequest) Reset() {
+	*x = BatchPutRequest{}
+	mi := &file_goquorum_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchPutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchPutRequest) ProtoMessage() {}
+
+func (x *BatchPutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchPutRequest.ProtoReflect.Descriptor instead.
+func (*BatchPutRequest) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *BatchPutRequest) GetItems() []*BatchPutItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *BatchPutRequest) GetOptions() *PutOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+type BatchPutItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Context       *Context               `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchPutItem) Reset() {
+	*x = BatchPutItem{}
+	mi := &file_goquorum_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchPutItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchPutItem) ProtoMessage() {}
+
+func (x *BatchPutItem) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchPutItem.ProtoReflect.Descriptor instead.
+func (*BatchPutItem) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *BatchPutItem) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *BatchPutItem) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *BatchPutItem) GetContext() *Context {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+type BatchPutResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Results       []*BatchPutResult      `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchPutResponse) Reset() {
+	*x = BatchPutResponse{}
+	mi := &file_goquorum_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchPutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchPutResponse) ProtoMessage() {}
+
+func (x *BatchPutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchPutResponse.ProtoReflect.Descriptor instead.
+func (*BatchPutResponse) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *BatchPutResponse) GetResults() []*BatchPutResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+type BatchPutResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Context       *Context               `protobuf:"bytes,2,opt,name=context,proto3" json:"context,omitempty"` // new context after write
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`     // empty if success
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchPutResult) Reset() {
+	*x = BatchPutResult{}
+	mi := &file_goquorum_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchPutResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchPutResult) ProtoMessage() {}
+
+func (x *BatchPutResult) ProtoReflect() protoreflect.Message {
+	mi := &file_goquorum_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchPutResult.ProtoReflect.Descriptor instead.
+func (*BatchPutResult) Descriptor() ([]byte, []int) {
+	return file_goquorum_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *BatchPutResult) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *BatchPutResult) GetContext() *Context {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *BatchPutResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -810,7 +1190,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_goquorum_proto_msgTypes[12]
+	mi := &file_goquorum_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +1202,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[12]
+	mi := &file_goquorum_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +1215,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{12}
+	return file_goquorum_proto_rawDescGZIP(), []int{19}
 }
 
 type HealthResponse struct {
@@ -851,7 +1231,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_goquorum_proto_msgTypes[13]
+	mi := &file_goquorum_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -863,7 +1243,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[13]
+	mi := &file_goquorum_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -876,7 +1256,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{13}
+	return file_goquorum_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *HealthResponse) GetStatus() HealthStatus {
@@ -929,7 +1309,7 @@ type CheckResult struct {
 
 func (x *CheckResult) Reset() {
 	*x = CheckResult{}
-	mi := &file_goquorum_proto_msgTypes[14]
+	mi := &file_goquorum_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -941,7 +1321,7 @@ func (x *CheckResult) String() string {
 func (*CheckResult) ProtoMessage() {}
 
 func (x *CheckResult) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[14]
+	mi := &file_goquorum_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -954,7 +1334,7 @@ func (x *CheckResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckResult.ProtoReflect.Descriptor instead.
 func (*CheckResult) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{14}
+	return file_goquorum_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CheckResult) GetStatus() string {
@@ -1014,7 +1394,7 @@ type ClusterInfoRequest struct {
 
 func (x *ClusterInfoRequest) Reset() {
 	*x = ClusterInfoRequest{}
-	mi := &file_goquorum_proto_msgTypes[15]
+	mi := &file_goquorum_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1026,7 +1406,7 @@ func (x *ClusterInfoRequest) String() string {
 func (*ClusterInfoRequest) ProtoMessage() {}
 
 func (x *ClusterInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[15]
+	mi := &file_goquorum_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1039,7 +1419,7 @@ func (x *ClusterInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterInfoRequest.ProtoReflect.Descriptor instead.
 func (*ClusterInfoRequest) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{15}
+	return file_goquorum_proto_rawDescGZIP(), []int{22}
 }
 
 type ClusterInfoResponse struct {
@@ -1053,7 +1433,7 @@ type ClusterInfoResponse struct {
 
 func (x *ClusterInfoResponse) Reset() {
 	*x = ClusterInfoResponse{}
-	mi := &file_goquorum_proto_msgTypes[16]
+	mi := &file_goquorum_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1065,7 +1445,7 @@ func (x *ClusterInfoResponse) String() string {
 func (*ClusterInfoResponse) ProtoMessage() {}
 
 func (x *ClusterInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[16]
+	mi := &file_goquorum_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1078,7 +1458,7 @@ func (x *ClusterInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterInfoResponse.ProtoReflect.Descriptor instead.
 func (*ClusterInfoResponse) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{16}
+	return file_goquorum_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ClusterInfoResponse) GetNodeId() string {
@@ -1115,7 +1495,7 @@ type PeerInfo struct {
 
 func (x *PeerInfo) Reset() {
 	*x = PeerInfo{}
-	mi := &file_goquorum_proto_msgTypes[17]
+	mi := &file_goquorum_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1127,7 +1507,7 @@ func (x *PeerInfo) String() string {
 func (*PeerInfo) ProtoMessage() {}
 
 func (x *PeerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[17]
+	mi := &file_goquorum_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1140,7 +1520,7 @@ func (x *PeerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerInfo.ProtoReflect.Descriptor instead.
 func (*PeerInfo) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{17}
+	return file_goquorum_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PeerInfo) GetNodeId() string {
@@ -1186,7 +1566,7 @@ type GetMetricsRequest struct {
 
 func (x *GetMetricsRequest) Reset() {
 	*x = GetMetricsRequest{}
-	mi := &file_goquorum_proto_msgTypes[18]
+	mi := &file_goquorum_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1198,7 +1578,7 @@ func (x *GetMetricsRequest) String() string {
 func (*GetMetricsRequest) ProtoMessage() {}
 
 func (x *GetMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[18]
+	mi := &file_goquorum_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1211,7 +1591,7 @@ func (x *GetMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{18}
+	return file_goquorum_proto_rawDescGZIP(), []int{25}
 }
 
 type GetMetricsResponse struct {
@@ -1223,7 +1603,7 @@ type GetMetricsResponse struct {
 
 func (x *GetMetricsResponse) Reset() {
 	*x = GetMetricsResponse{}
-	mi := &file_goquorum_proto_msgTypes[19]
+	mi := &file_goquorum_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1235,7 +1615,7 @@ func (x *GetMetricsResponse) String() string {
 func (*GetMetricsResponse) ProtoMessage() {}
 
 func (x *GetMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[19]
+	mi := &file_goquorum_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1248,7 +1628,7 @@ func (x *GetMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{19}
+	return file_goquorum_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetMetricsResponse) GetMetrics() string {
@@ -1267,7 +1647,7 @@ type KeyInfoRequest struct {
 
 func (x *KeyInfoRequest) Reset() {
 	*x = KeyInfoRequest{}
-	mi := &file_goquorum_proto_msgTypes[20]
+	mi := &file_goquorum_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1279,7 +1659,7 @@ func (x *KeyInfoRequest) String() string {
 func (*KeyInfoRequest) ProtoMessage() {}
 
 func (x *KeyInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[20]
+	mi := &file_goquorum_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1292,7 +1672,7 @@ func (x *KeyInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyInfoRequest.ProtoReflect.Descriptor instead.
 func (*KeyInfoRequest) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{20}
+	return file_goquorum_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *KeyInfoRequest) GetKey() []byte {
@@ -1313,7 +1693,7 @@ type KeyInfoResponse struct {
 
 func (x *KeyInfoResponse) Reset() {
 	*x = KeyInfoResponse{}
-	mi := &file_goquorum_proto_msgTypes[21]
+	mi := &file_goquorum_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1705,7 @@ func (x *KeyInfoResponse) String() string {
 func (*KeyInfoResponse) ProtoMessage() {}
 
 func (x *KeyInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[21]
+	mi := &file_goquorum_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1718,7 @@ func (x *KeyInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyInfoResponse.ProtoReflect.Descriptor instead.
 func (*KeyInfoResponse) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{21}
+	return file_goquorum_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *KeyInfoResponse) GetKey() []byte {
@@ -1374,7 +1754,7 @@ type ReplicaKeyInfo struct {
 
 func (x *ReplicaKeyInfo) Reset() {
 	*x = ReplicaKeyInfo{}
-	mi := &file_goquorum_proto_msgTypes[22]
+	mi := &file_goquorum_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1386,7 +1766,7 @@ func (x *ReplicaKeyInfo) String() string {
 func (*ReplicaKeyInfo) ProtoMessage() {}
 
 func (x *ReplicaKeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[22]
+	mi := &file_goquorum_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1399,7 +1779,7 @@ func (x *ReplicaKeyInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplicaKeyInfo.ProtoReflect.Descriptor instead.
 func (*ReplicaKeyInfo) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{22}
+	return file_goquorum_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ReplicaKeyInfo) GetNodeId() string {
@@ -1442,7 +1822,7 @@ type SiblingInfo struct {
 
 func (x *SiblingInfo) Reset() {
 	*x = SiblingInfo{}
-	mi := &file_goquorum_proto_msgTypes[23]
+	mi := &file_goquorum_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1454,7 +1834,7 @@ func (x *SiblingInfo) String() string {
 func (*SiblingInfo) ProtoMessage() {}
 
 func (x *SiblingInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[23]
+	mi := &file_goquorum_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1467,7 +1847,7 @@ func (x *SiblingInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SiblingInfo.ProtoReflect.Descriptor instead.
 func (*SiblingInfo) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{23}
+	return file_goquorum_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SiblingInfo) GetContext() *Context {
@@ -1506,7 +1886,7 @@ type TriggerCompactionRequest struct {
 
 func (x *TriggerCompactionRequest) Reset() {
 	*x = TriggerCompactionRequest{}
-	mi := &file_goquorum_proto_msgTypes[24]
+	mi := &file_goquorum_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1518,7 +1898,7 @@ func (x *TriggerCompactionRequest) String() string {
 func (*TriggerCompactionRequest) ProtoMessage() {}
 
 func (x *TriggerCompactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[24]
+	mi := &file_goquorum_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1531,7 +1911,7 @@ func (x *TriggerCompactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerCompactionRequest.ProtoReflect.Descriptor instead.
 func (*TriggerCompactionRequest) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{24}
+	return file_goquorum_proto_rawDescGZIP(), []int{31}
 }
 
 type TriggerCompactionResponse struct {
@@ -1544,7 +1924,7 @@ type TriggerCompactionResponse struct {
 
 func (x *TriggerCompactionResponse) Reset() {
 	*x = TriggerCompactionResponse{}
-	mi := &file_goquorum_proto_msgTypes[25]
+	mi := &file_goquorum_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1556,7 +1936,7 @@ func (x *TriggerCompactionResponse) String() string {
 func (*TriggerCompactionResponse) ProtoMessage() {}
 
 func (x *TriggerCompactionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goquorum_proto_msgTypes[25]
+	mi := &file_goquorum_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1569,7 +1949,7 @@ func (x *TriggerCompactionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerCompactionResponse.ProtoReflect.Descriptor instead.
 func (*TriggerCompactionResponse) Descriptor() ([]byte, []int) {
-	return file_goquorum_proto_rawDescGZIP(), []int{25}
+	return file_goquorum_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TriggerCompactionResponse) GetStarted() bool {
@@ -1617,12 +1997,14 @@ const file_goquorum_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12.\n" +
 	"\acontext\x18\x03 \x01(\v2\x14.goquorum.v1.ContextR\acontext\x121\n" +
-	"\aoptions\x18\x04 \x01(\v2\x17.goquorum.v1.PutOptionsR\aoptions\"9\n" +
+	"\aoptions\x18\x04 \x01(\v2\x17.goquorum.v1.PutOptionsR\aoptions\"Z\n" +
 	"\n" +
 	"PutOptions\x12\f\n" +
 	"\x01w\x18\x01 \x01(\rR\x01w\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x02 \x01(\rR\ttimeoutMs\"=\n" +
+	"timeout_ms\x18\x02 \x01(\rR\ttimeoutMs\x12\x1f\n" +
+	"\vttl_seconds\x18\x03 \x01(\x03R\n" +
+	"ttlSeconds\"=\n" +
 	"\vPutResponse\x12.\n" +
 	"\acontext\x18\x01 \x01(\v2\x14.goquorum.v1.ContextR\acontext\"\x87\x01\n" +
 	"\rDeleteRequest\x12\x10\n" +
@@ -1633,7 +2015,29 @@ const file_goquorum_proto_rawDesc = "" +
 	"\x01w\x18\x01 \x01(\rR\x01w\x12\x1d\n" +
 	"\n" +
 	"timeout_ms\x18\x02 \x01(\rR\ttimeoutMs\"\x10\n" +
-	"\x0eDeleteResponse\"\x0f\n" +
+	"\x0eDeleteResponse\"X\n" +
+	"\x0fBatchGetRequest\x12\x12\n" +
+	"\x04keys\x18\x01 \x03(\fR\x04keys\x121\n" +
+	"\aoptions\x18\x02 \x01(\v2\x17.goquorum.v1.GetOptionsR\aoptions\"I\n" +
+	"\x10BatchGetResponse\x125\n" +
+	"\aresults\x18\x01 \x03(\v2\x1b.goquorum.v1.BatchGetResultR\aresults\"j\n" +
+	"\x0eBatchGetResult\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x120\n" +
+	"\bsiblings\x18\x02 \x03(\v2\x14.goquorum.v1.SiblingR\bsiblings\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"u\n" +
+	"\x0fBatchPutRequest\x12/\n" +
+	"\x05items\x18\x01 \x03(\v2\x19.goquorum.v1.BatchPutItemR\x05items\x121\n" +
+	"\aoptions\x18\x02 \x01(\v2\x17.goquorum.v1.PutOptionsR\aoptions\"f\n" +
+	"\fBatchPutItem\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\x12.\n" +
+	"\acontext\x18\x03 \x01(\v2\x14.goquorum.v1.ContextR\acontext\"I\n" +
+	"\x10BatchPutResponse\x125\n" +
+	"\aresults\x18\x01 \x03(\v2\x1b.goquorum.v1.BatchPutResultR\aresults\"h\n" +
+	"\x0eBatchPutResult\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x12.\n" +
+	"\acontext\x18\x02 \x01(\v2\x14.goquorum.v1.ContextR\acontext\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x0f\n" +
 	"\rHealthRequest\"\xb3\x02\n" +
 	"\x0eHealthResponse\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.goquorum.v1.HealthStatusR\x06status\x12\x17\n" +
@@ -1707,18 +2111,20 @@ const file_goquorum_proto_rawDesc = "" +
 	"\x0fCLUSTER_UNKNOWN\x10\x00\x12\x13\n" +
 	"\x0fCLUSTER_HEALTHY\x10\x01\x12\x14\n" +
 	"\x10CLUSTER_DEGRADED\x10\x02\x12\x14\n" +
-	"\x10CLUSTER_CRITICAL\x10\x032\x8c\x02\n" +
+	"\x10CLUSTER_CRITICAL\x10\x032\xd2\x03\n" +
 	"\bGoQuorum\x12P\n" +
 	"\x03Get\x12\x17.goquorum.v1.GetRequest\x1a\x18.goquorum.v1.GetResponse\"\x16\x82\xd3\xe4\x93\x02\x10\x12\x0e/v1/keys/{key}\x12S\n" +
 	"\x03Put\x12\x17.goquorum.v1.PutRequest\x1a\x18.goquorum.v1.PutResponse\"\x19\x82\xd3\xe4\x93\x02\x13:\x01*\x1a\x0e/v1/keys/{key}\x12Y\n" +
-	"\x06Delete\x12\x1a.goquorum.v1.DeleteRequest\x1a\x1b.goquorum.v1.DeleteResponse\"\x16\x82\xd3\xe4\x93\x02\x10*\x0e/v1/keys/{key}2\xaa\x04\n" +
+	"\x06Delete\x12\x1a.goquorum.v1.DeleteRequest\x1a\x1b.goquorum.v1.DeleteResponse\"\x16\x82\xd3\xe4\x93\x02\x10*\x0e/v1/keys/{key}\x12a\n" +
+	"\bBatchGet\x12\x1c.goquorum.v1.BatchGetRequest\x1a\x1d.goquorum.v1.BatchGetResponse\"\x18\x82\xd3\xe4\x93\x02\x12:\x01*\"\r/v1/batch/get\x12a\n" +
+	"\bBatchPut\x12\x1c.goquorum.v1.BatchPutRequest\x1a\x1d.goquorum.v1.BatchPutResponse\"\x18\x82\xd3\xe4\x93\x02\x12:\x01*\"\r/v1/batch/put2\xaa\x04\n" +
 	"\rGoQuorumAdmin\x12[\n" +
 	"\x06Health\x12\x1a.goquorum.v1.HealthRequest\x1a\x1b.goquorum.v1.HealthResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/admin/health\x12k\n" +
 	"\vClusterInfo\x12\x1f.goquorum.v1.ClusterInfoRequest\x1a .goquorum.v1.ClusterInfoResponse\"\x19\x82\xd3\xe4\x93\x02\x13\x12\x11/v1/admin/cluster\x12h\n" +
 	"\n" +
 	"GetMetrics\x12\x1e.goquorum.v1.GetMetricsRequest\x1a\x1f.goquorum.v1.GetMetricsResponse\"\x19\x82\xd3\xe4\x93\x02\x13\x12\x11/v1/admin/metrics\x12b\n" +
 	"\aKeyInfo\x12\x1b.goquorum.v1.KeyInfoRequest\x1a\x1c.goquorum.v1.KeyInfoResponse\"\x1c\x82\xd3\xe4\x93\x02\x16\x12\x14/v1/admin/keys/{key}\x12\x80\x01\n" +
-	"\x11TriggerCompaction\x12%.goquorum.v1.TriggerCompactionRequest\x1a&.goquorum.v1.TriggerCompactionResponse\"\x1c\x82\xd3\xe4\x93\x02\x16\"\x14/v1/admin/compactionB\x14Z\x12GoQuorum/api/v1;v1b\x06proto3"
+	"\x11TriggerCompaction\x12%.goquorum.v1.TriggerCompactionRequest\x1a&.goquorum.v1.TriggerCompactionResponse\"\x1c\x82\xd3\xe4\x93\x02\x16\"\x14/v1/admin/compactionB\x11Z\x0fGoQuorum/api;v1b\x06proto3"
 
 var (
 	file_goquorum_proto_rawDescOnce sync.Once
@@ -1733,7 +2139,7 @@ func file_goquorum_proto_rawDescGZIP() []byte {
 }
 
 var file_goquorum_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_goquorum_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_goquorum_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_goquorum_proto_goTypes = []any{
 	(HealthStatus)(0),                 // 0: goquorum.v1.HealthStatus
 	(PeerStatus)(0),                   // 1: goquorum.v1.PeerStatus
@@ -1750,21 +2156,28 @@ var file_goquorum_proto_goTypes = []any{
 	(*DeleteRequest)(nil),             // 12: goquorum.v1.DeleteRequest
 	(*DeleteOptions)(nil),             // 13: goquorum.v1.DeleteOptions
 	(*DeleteResponse)(nil),            // 14: goquorum.v1.DeleteResponse
-	(*HealthRequest)(nil),             // 15: goquorum.v1.HealthRequest
-	(*HealthResponse)(nil),            // 16: goquorum.v1.HealthResponse
-	(*CheckResult)(nil),               // 17: goquorum.v1.CheckResult
-	(*ClusterInfoRequest)(nil),        // 18: goquorum.v1.ClusterInfoRequest
-	(*ClusterInfoResponse)(nil),       // 19: goquorum.v1.ClusterInfoResponse
-	(*PeerInfo)(nil),                  // 20: goquorum.v1.PeerInfo
-	(*GetMetricsRequest)(nil),         // 21: goquorum.v1.GetMetricsRequest
-	(*GetMetricsResponse)(nil),        // 22: goquorum.v1.GetMetricsResponse
-	(*KeyInfoRequest)(nil),            // 23: goquorum.v1.KeyInfoRequest
-	(*KeyInfoResponse)(nil),           // 24: goquorum.v1.KeyInfoResponse
-	(*ReplicaKeyInfo)(nil),            // 25: goquorum.v1.ReplicaKeyInfo
-	(*SiblingInfo)(nil),               // 26: goquorum.v1.SiblingInfo
-	(*TriggerCompactionRequest)(nil),  // 27: goquorum.v1.TriggerCompactionRequest
-	(*TriggerCompactionResponse)(nil), // 28: goquorum.v1.TriggerCompactionResponse
-	nil,                               // 29: goquorum.v1.HealthResponse.ChecksEntry
+	(*BatchGetRequest)(nil),           // 15: goquorum.v1.BatchGetRequest
+	(*BatchGetResponse)(nil),          // 16: goquorum.v1.BatchGetResponse
+	(*BatchGetResult)(nil),            // 17: goquorum.v1.BatchGetResult
+	(*BatchPutRequest)(nil),           // 18: goquorum.v1.BatchPutRequest
+	(*BatchPutItem)(nil),              // 19: goquorum.v1.BatchPutItem
+	(*BatchPutResponse)(nil),          // 20: goquorum.v1.BatchPutResponse
+	(*BatchPutResult)(nil),            // 21: goquorum.v1.BatchPutResult
+	(*HealthRequest)(nil),             // 22: goquorum.v1.HealthRequest
+	(*HealthResponse)(nil),            // 23: goquorum.v1.HealthResponse
+	(*CheckResult)(nil),               // 24: goquorum.v1.CheckResult
+	(*ClusterInfoRequest)(nil),        // 25: goquorum.v1.ClusterInfoRequest
+	(*ClusterInfoResponse)(nil),       // 26: goquorum.v1.ClusterInfoResponse
+	(*PeerInfo)(nil),                  // 27: goquorum.v1.PeerInfo
+	(*GetMetricsRequest)(nil),         // 28: goquorum.v1.GetMetricsRequest
+	(*GetMetricsResponse)(nil),        // 29: goquorum.v1.GetMetricsResponse
+	(*KeyInfoRequest)(nil),            // 30: goquorum.v1.KeyInfoRequest
+	(*KeyInfoResponse)(nil),           // 31: goquorum.v1.KeyInfoResponse
+	(*ReplicaKeyInfo)(nil),            // 32: goquorum.v1.ReplicaKeyInfo
+	(*SiblingInfo)(nil),               // 33: goquorum.v1.SiblingInfo
+	(*TriggerCompactionRequest)(nil),  // 34: goquorum.v1.TriggerCompactionRequest
+	(*TriggerCompactionResponse)(nil), // 35: goquorum.v1.TriggerCompactionResponse
+	nil,                               // 36: goquorum.v1.HealthResponse.ChecksEntry
 }
 var file_goquorum_proto_depIdxs = []int32{
 	4,  // 0: goquorum.v1.GetRequest.options:type_name -> goquorum.v1.GetOptions
@@ -1776,36 +2189,48 @@ var file_goquorum_proto_depIdxs = []int32{
 	7,  // 6: goquorum.v1.PutResponse.context:type_name -> goquorum.v1.Context
 	7,  // 7: goquorum.v1.DeleteRequest.context:type_name -> goquorum.v1.Context
 	13, // 8: goquorum.v1.DeleteRequest.options:type_name -> goquorum.v1.DeleteOptions
-	0,  // 9: goquorum.v1.HealthResponse.status:type_name -> goquorum.v1.HealthStatus
-	29, // 10: goquorum.v1.HealthResponse.checks:type_name -> goquorum.v1.HealthResponse.ChecksEntry
-	20, // 11: goquorum.v1.ClusterInfoResponse.peers:type_name -> goquorum.v1.PeerInfo
-	2,  // 12: goquorum.v1.ClusterInfoResponse.cluster_status:type_name -> goquorum.v1.ClusterStatus
-	1,  // 13: goquorum.v1.PeerInfo.status:type_name -> goquorum.v1.PeerStatus
-	25, // 14: goquorum.v1.KeyInfoResponse.replicas:type_name -> goquorum.v1.ReplicaKeyInfo
-	26, // 15: goquorum.v1.ReplicaKeyInfo.siblings:type_name -> goquorum.v1.SiblingInfo
-	7,  // 16: goquorum.v1.SiblingInfo.context:type_name -> goquorum.v1.Context
-	17, // 17: goquorum.v1.HealthResponse.ChecksEntry.value:type_name -> goquorum.v1.CheckResult
-	3,  // 18: goquorum.v1.GoQuorum.Get:input_type -> goquorum.v1.GetRequest
-	9,  // 19: goquorum.v1.GoQuorum.Put:input_type -> goquorum.v1.PutRequest
-	12, // 20: goquorum.v1.GoQuorum.Delete:input_type -> goquorum.v1.DeleteRequest
-	15, // 21: goquorum.v1.GoQuorumAdmin.Health:input_type -> goquorum.v1.HealthRequest
-	18, // 22: goquorum.v1.GoQuorumAdmin.ClusterInfo:input_type -> goquorum.v1.ClusterInfoRequest
-	21, // 23: goquorum.v1.GoQuorumAdmin.GetMetrics:input_type -> goquorum.v1.GetMetricsRequest
-	23, // 24: goquorum.v1.GoQuorumAdmin.KeyInfo:input_type -> goquorum.v1.KeyInfoRequest
-	27, // 25: goquorum.v1.GoQuorumAdmin.TriggerCompaction:input_type -> goquorum.v1.TriggerCompactionRequest
-	5,  // 26: goquorum.v1.GoQuorum.Get:output_type -> goquorum.v1.GetResponse
-	11, // 27: goquorum.v1.GoQuorum.Put:output_type -> goquorum.v1.PutResponse
-	14, // 28: goquorum.v1.GoQuorum.Delete:output_type -> goquorum.v1.DeleteResponse
-	16, // 29: goquorum.v1.GoQuorumAdmin.Health:output_type -> goquorum.v1.HealthResponse
-	19, // 30: goquorum.v1.GoQuorumAdmin.ClusterInfo:output_type -> goquorum.v1.ClusterInfoResponse
-	22, // 31: goquorum.v1.GoQuorumAdmin.GetMetrics:output_type -> goquorum.v1.GetMetricsResponse
-	24, // 32: goquorum.v1.GoQuorumAdmin.KeyInfo:output_type -> goquorum.v1.KeyInfoResponse
-	28, // 33: goquorum.v1.GoQuorumAdmin.TriggerCompaction:output_type -> goquorum.v1.TriggerCompactionResponse
-	26, // [26:34] is the sub-list for method output_type
-	18, // [18:26] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	4,  // 9: goquorum.v1.BatchGetRequest.options:type_name -> goquorum.v1.GetOptions
+	17, // 10: goquorum.v1.BatchGetResponse.results:type_name -> goquorum.v1.BatchGetResult
+	6,  // 11: goquorum.v1.BatchGetResult.siblings:type_name -> goquorum.v1.Sibling
+	19, // 12: goquorum.v1.BatchPutRequest.items:type_name -> goquorum.v1.BatchPutItem
+	10, // 13: goquorum.v1.BatchPutRequest.options:type_name -> goquorum.v1.PutOptions
+	7,  // 14: goquorum.v1.BatchPutItem.context:type_name -> goquorum.v1.Context
+	21, // 15: goquorum.v1.BatchPutResponse.results:type_name -> goquorum.v1.BatchPutResult
+	7,  // 16: goquorum.v1.BatchPutResult.context:type_name -> goquorum.v1.Context
+	0,  // 17: goquorum.v1.HealthResponse.status:type_name -> goquorum.v1.HealthStatus
+	36, // 18: goquorum.v1.HealthResponse.checks:type_name -> goquorum.v1.HealthResponse.ChecksEntry
+	27, // 19: goquorum.v1.ClusterInfoResponse.peers:type_name -> goquorum.v1.PeerInfo
+	2,  // 20: goquorum.v1.ClusterInfoResponse.cluster_status:type_name -> goquorum.v1.ClusterStatus
+	1,  // 21: goquorum.v1.PeerInfo.status:type_name -> goquorum.v1.PeerStatus
+	32, // 22: goquorum.v1.KeyInfoResponse.replicas:type_name -> goquorum.v1.ReplicaKeyInfo
+	33, // 23: goquorum.v1.ReplicaKeyInfo.siblings:type_name -> goquorum.v1.SiblingInfo
+	7,  // 24: goquorum.v1.SiblingInfo.context:type_name -> goquorum.v1.Context
+	24, // 25: goquorum.v1.HealthResponse.ChecksEntry.value:type_name -> goquorum.v1.CheckResult
+	3,  // 26: goquorum.v1.GoQuorum.Get:input_type -> goquorum.v1.GetRequest
+	9,  // 27: goquorum.v1.GoQuorum.Put:input_type -> goquorum.v1.PutRequest
+	12, // 28: goquorum.v1.GoQuorum.Delete:input_type -> goquorum.v1.DeleteRequest
+	15, // 29: goquorum.v1.GoQuorum.BatchGet:input_type -> goquorum.v1.BatchGetRequest
+	18, // 30: goquorum.v1.GoQuorum.BatchPut:input_type -> goquorum.v1.BatchPutRequest
+	22, // 31: goquorum.v1.GoQuorumAdmin.Health:input_type -> goquorum.v1.HealthRequest
+	25, // 32: goquorum.v1.GoQuorumAdmin.ClusterInfo:input_type -> goquorum.v1.ClusterInfoRequest
+	28, // 33: goquorum.v1.GoQuorumAdmin.GetMetrics:input_type -> goquorum.v1.GetMetricsRequest
+	30, // 34: goquorum.v1.GoQuorumAdmin.KeyInfo:input_type -> goquorum.v1.KeyInfoRequest
+	34, // 35: goquorum.v1.GoQuorumAdmin.TriggerCompaction:input_type -> goquorum.v1.TriggerCompactionRequest
+	5,  // 36: goquorum.v1.GoQuorum.Get:output_type -> goquorum.v1.GetResponse
+	11, // 37: goquorum.v1.GoQuorum.Put:output_type -> goquorum.v1.PutResponse
+	14, // 38: goquorum.v1.GoQuorum.Delete:output_type -> goquorum.v1.DeleteResponse
+	16, // 39: goquorum.v1.GoQuorum.BatchGet:output_type -> goquorum.v1.BatchGetResponse
+	20, // 40: goquorum.v1.GoQuorum.BatchPut:output_type -> goquorum.v1.BatchPutResponse
+	23, // 41: goquorum.v1.GoQuorumAdmin.Health:output_type -> goquorum.v1.HealthResponse
+	26, // 42: goquorum.v1.GoQuorumAdmin.ClusterInfo:output_type -> goquorum.v1.ClusterInfoResponse
+	29, // 43: goquorum.v1.GoQuorumAdmin.GetMetrics:output_type -> goquorum.v1.GetMetricsResponse
+	31, // 44: goquorum.v1.GoQuorumAdmin.KeyInfo:output_type -> goquorum.v1.KeyInfoResponse
+	35, // 45: goquorum.v1.GoQuorumAdmin.TriggerCompaction:output_type -> goquorum.v1.TriggerCompactionResponse
+	36, // [36:46] is the sub-list for method output_type
+	26, // [26:36] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_goquorum_proto_init() }
@@ -1819,7 +2244,7 @@ func file_goquorum_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_goquorum_proto_rawDesc), len(file_goquorum_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   27,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

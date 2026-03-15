@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GoQuorum_Get_FullMethodName    = "/goquorum.v1.GoQuorum/Get"
-	GoQuorum_Put_FullMethodName    = "/goquorum.v1.GoQuorum/Put"
-	GoQuorum_Delete_FullMethodName = "/goquorum.v1.GoQuorum/Delete"
+	GoQuorum_Get_FullMethodName      = "/goquorum.v1.GoQuorum/Get"
+	GoQuorum_Put_FullMethodName      = "/goquorum.v1.GoQuorum/Put"
+	GoQuorum_Delete_FullMethodName   = "/goquorum.v1.GoQuorum/Delete"
+	GoQuorum_BatchGet_FullMethodName = "/goquorum.v1.GoQuorum/BatchGet"
+	GoQuorum_BatchPut_FullMethodName = "/goquorum.v1.GoQuorum/BatchPut"
 )
 
 // GoQuorumClient is the client API for GoQuorum service.
@@ -34,6 +36,10 @@ type GoQuorumClient interface {
 	Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*PutResponse, error)
 	// Delete removes a key by writing a tombstone
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	// BatchGet retrieves values for multiple keys
+	BatchGet(ctx context.Context, in *BatchGetRequest, opts ...grpc.CallOption) (*BatchGetResponse, error)
+	// BatchPut stores multiple key-value pairs
+	BatchPut(ctx context.Context, in *BatchPutRequest, opts ...grpc.CallOption) (*BatchPutResponse, error)
 }
 
 type goQuorumClient struct {
@@ -74,6 +80,26 @@ func (c *goQuorumClient) Delete(ctx context.Context, in *DeleteRequest, opts ...
 	return out, nil
 }
 
+func (c *goQuorumClient) BatchGet(ctx context.Context, in *BatchGetRequest, opts ...grpc.CallOption) (*BatchGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchGetResponse)
+	err := c.cc.Invoke(ctx, GoQuorum_BatchGet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *goQuorumClient) BatchPut(ctx context.Context, in *BatchPutRequest, opts ...grpc.CallOption) (*BatchPutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchPutResponse)
+	err := c.cc.Invoke(ctx, GoQuorum_BatchPut_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GoQuorumServer is the server API for GoQuorum service.
 // All implementations must embed UnimplementedGoQuorumServer
 // for forward compatibility.
@@ -84,6 +110,10 @@ type GoQuorumServer interface {
 	Put(context.Context, *PutRequest) (*PutResponse, error)
 	// Delete removes a key by writing a tombstone
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	// BatchGet retrieves values for multiple keys
+	BatchGet(context.Context, *BatchGetRequest) (*BatchGetResponse, error)
+	// BatchPut stores multiple key-value pairs
+	BatchPut(context.Context, *BatchPutRequest) (*BatchPutResponse, error)
 	mustEmbedUnimplementedGoQuorumServer()
 }
 
@@ -102,6 +132,12 @@ func (UnimplementedGoQuorumServer) Put(context.Context, *PutRequest) (*PutRespon
 }
 func (UnimplementedGoQuorumServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedGoQuorumServer) BatchGet(context.Context, *BatchGetRequest) (*BatchGetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchGet not implemented")
+}
+func (UnimplementedGoQuorumServer) BatchPut(context.Context, *BatchPutRequest) (*BatchPutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchPut not implemented")
 }
 func (UnimplementedGoQuorumServer) mustEmbedUnimplementedGoQuorumServer() {}
 func (UnimplementedGoQuorumServer) testEmbeddedByValue()                  {}
@@ -178,6 +214,42 @@ func _GoQuorum_Delete_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GoQuorum_BatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GoQuorumServer).BatchGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GoQuorum_BatchGet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GoQuorumServer).BatchGet(ctx, req.(*BatchGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GoQuorum_BatchPut_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchPutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GoQuorumServer).BatchPut(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GoQuorum_BatchPut_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GoQuorumServer).BatchPut(ctx, req.(*BatchPutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GoQuorum_ServiceDesc is the grpc.ServiceDesc for GoQuorum service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -196,6 +268,14 @@ var GoQuorum_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _GoQuorum_Delete_Handler,
+		},
+		{
+			MethodName: "BatchGet",
+			Handler:    _GoQuorum_BatchGet_Handler,
+		},
+		{
+			MethodName: "BatchPut",
+			Handler:    _GoQuorum_BatchPut_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

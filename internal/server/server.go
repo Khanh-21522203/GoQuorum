@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,15 +12,18 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 
+	pb "GoQuorum/api"
+	internalpb "GoQuorum/api/cluster"
 	"GoQuorum/internal/cluster"
 	"GoQuorum/internal/config"
+	"GoQuorum/internal/security"
 	"GoQuorum/internal/storage"
 )
 
-// Server wraps gRPC and HTTP gateway servers
+// Server wraps gRPC and HTTP servers
 type Server struct {
 	grpcServer   *grpc.Server
 	httpServer   *http.Server
@@ -30,9 +34,19 @@ type Server struct {
 	coordinator *cluster.Coordinator
 	storage     *storage.Storage
 	membership  *cluster.MembershipManager
+	ring        *cluster.HashRing
+
+	// API handlers
+	clientAPI   *ClientAPI
+	adminAPI    *AdminAPI
+	internalAPI *InternalAPI
+
+	// Optional gossip instance; attached before Start() via SetGossip.
+	gossip *cluster.Gossip
 
 	// Configuration
 	config    config.ServerConfig
+	dataDir   string // storage data directory for disk health checks
 	nodeID    string
 	version   string
 	startTime time.Time
@@ -42,23 +56,11 @@ type Server struct {
 	stopCh chan struct{}
 }
 
-// ServerConfig holds server configuration
-type ServerConfig struct {
-	GRPCAddr        string
-	HTTPAddr        string
-	MaxRecvMsgSize  int
-	MaxSendMsgSize  int
-	EnableReflection bool
-}
-
 // DefaultServerConfig returns default server configuration
-func DefaultServerConfig() ServerConfig {
-	return ServerConfig{
-		GRPCAddr:        ":7070",
-		HTTPAddr:        ":8080",
-		MaxRecvMsgSize:  4 * 1024 * 1024,   // 4MB
-		MaxSendMsgSize:  100 * 1024 * 1024, // 100MB
-		EnableReflection: true,
+func DefaultServerConfig() config.ServerConfig {
+	return config.ServerConfig{
+		GRPCAddr: ":7070",
+		HTTPAddr: ":8080",
 	}
 }
 
@@ -67,7 +69,9 @@ func NewServer(
 	coordinator *cluster.Coordinator,
 	store *storage.Storage,
 	membership *cluster.MembershipManager,
+	ring *cluster.HashRing,
 	cfg config.ServerConfig,
+	dataDir string,
 	nodeID string,
 	version string,
 ) *Server {
@@ -75,7 +79,9 @@ func NewServer(
 		coordinator: coordinator,
 		storage:     store,
 		membership:  membership,
+		ring:        ring,
 		config:      cfg,
+		dataDir:     dataDir,
 		nodeID:      nodeID,
 		version:     version,
 		startTime:   time.Now(),
@@ -83,29 +89,56 @@ func NewServer(
 	}
 }
 
+// SetGossip attaches a Gossip instance; must be called before Start().
+func (s *Server) SetGossip(g *cluster.Gossip) {
+	s.gossip = g
+}
+
 // Start starts both gRPC and HTTP servers
 func (s *Server) Start() error {
-	// Create gRPC server with options
+	// Build API handlers
+	s.clientAPI = NewClientAPI(s.coordinator, s.storage)
+	s.adminAPI = NewAdminAPI(s.storage, s.membership, s.nodeID, s.version, s.startTime)
+	s.internalAPI = NewInternalAPI(s.storage, s.membership)
+
+	// Wire Merkle root function after coordinator is started
+	if s.coordinator != nil {
+		s.internalAPI.SetMerkleRootFn(s.coordinator.GetMerkleRoot)
+	}
+
+	// Wire gossip if provided
+	if s.gossip != nil {
+		s.internalAPI.SetGossip(s.gossip)
+	}
+
+	// Create gRPC server and register all services
 	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(4 * 1024 * 1024),
 		grpc.MaxSendMsgSize(100 * 1024 * 1024),
 	}
+	if s.config.TLS.Enabled {
+		tlsCfg, err := security.LoadServerTLSConfig(s.config.TLS)
+		if err != nil {
+			return fmt.Errorf("load server TLS config: %w", err)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	}
+	if s.config.RateLimit.GlobalRPS > 0 {
+		rl := NewRateLimiter(s.config.RateLimit)
+		grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(rl.UnaryInterceptor()))
+	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
-
-	// Register services
-	s.registerServices()
-
-	// Enable reflection for debugging
+	pb.RegisterGoQuorumServer(s.grpcServer, &goQuorumGRPCServer{api: s.clientAPI})
+	pb.RegisterGoQuorumAdminServer(s.grpcServer, &goQuorumAdminGRPCServer{api: s.adminAPI})
+	internalpb.RegisterGoQuorumInternalServer(s.grpcServer, &goQuorumInternalGRPCServer{api: s.internalAPI})
 	reflection.Register(s.grpcServer)
 
-	// Start gRPC listener
 	var err error
 	s.grpcListener, err = net.Listen("tcp", s.config.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.config.GRPCAddr, err)
 	}
 
-	// Start gRPC server
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -115,50 +148,57 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	// Start HTTP gateway
-	if err := s.startHTTPGateway(); err != nil {
-		return fmt.Errorf("failed to start HTTP gateway: %w", err)
+	// Start HTTP server
+	if err := s.startHTTP(); err != nil {
+		return fmt.Errorf("failed to start HTTP server: %w", err)
 	}
 
 	return nil
 }
 
-// startHTTPGateway starts the HTTP/JSON gateway
-func (s *Server) startHTTPGateway() error {
+// startHTTP wires all HTTP routes and starts the listener.
+func (s *Server) startHTTP() error {
+	// grpc-gateway mux handles all /v1/* routes, translating HTTP/JSON ↔ proto
+	gwMux := runtime.NewServeMux()
 	ctx := context.Background()
-
-	// Create gRPC-Gateway mux
-	gwMux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{}),
-	)
-
-	// Connect to local gRPC server
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	if err := pb.RegisterGoQuorumHandlerServer(ctx, gwMux, &goQuorumGRPCServer{api: s.clientAPI}); err != nil {
+		return fmt.Errorf("register gateway client handler: %w", err)
+	}
+	if err := pb.RegisterGoQuorumAdminHandlerServer(ctx, gwMux, &goQuorumAdminGRPCServer{api: s.adminAPI}); err != nil {
+		return fmt.Errorf("register gateway admin handler: %w", err)
 	}
 
-	// Register gateway handlers (will be implemented when proto is generated)
-	// For now, we'll add health and metrics endpoints directly
-
-	// Create HTTP mux
 	mux := http.NewServeMux()
 
-	// Health endpoints
+	// ── Health ──────────────────────────────────────────────────────────────
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/health/live", s.handleLive)
 	mux.HandleFunc("/health/ready", s.handleReady)
 
-	// Metrics endpoint
+	// ── Metrics ─────────────────────────────────────────────────────────────
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// Debug endpoints
+	// ── Debug ───────────────────────────────────────────────────────────────
 	mux.HandleFunc("/debug/cluster", s.handleDebugCluster)
 	mux.HandleFunc("/debug/ring", s.handleDebugRing)
 
-	// gRPC-Gateway (API endpoints)
+	// ── Internal RPC (node-to-node) ──────────────────────────────────────────
+	mux.HandleFunc("/internal/replicate", s.handleInternalReplicate)
+	mux.HandleFunc("/internal/read", s.handleInternalRead)
+	mux.HandleFunc("/internal/heartbeat", s.handleInternalHeartbeat)
+	mux.HandleFunc("/internal/merkle-root", s.handleInternalMerkleRoot)
+	mux.HandleFunc("/internal/notify-leaving", s.handleInternalNotifyLeaving)
+	if s.internalAPI.gossip != nil {
+		mux.HandleFunc("/internal/gossip/exchange", s.internalAPI.handleGossipExchange)
+	}
+
+	// ── Backup / Restore ─────────────────────────────────────────────────────
+	mux.HandleFunc("/admin/backup", s.handleAdminBackup)
+	mux.HandleFunc("/admin/restore", s.handleAdminRestore)
+
+	// ── Client + Admin API via grpc-gateway ──────────────────────────────────
 	mux.Handle("/v1/", gwMux)
 
-	// Create HTTP server
 	s.httpServer = &http.Server{
 		Addr:         s.config.HTTPAddr,
 		Handler:      mux,
@@ -167,14 +207,12 @@ func (s *Server) startHTTPGateway() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start HTTP listener
 	var err error
 	s.httpListener, err = net.Listen("tcp", s.config.HTTPAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.config.HTTPAddr, err)
 	}
 
-	// Start HTTP server
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -184,43 +222,164 @@ func (s *Server) startHTTPGateway() error {
 		}
 	}()
 
-	_ = ctx
-	_ = opts
-
 	return nil
 }
 
-// registerServices registers gRPC services
-func (s *Server) registerServices() {
-	// Register client API service
-	clientAPI := NewClientAPI(s.coordinator, s.storage)
-	_ = clientAPI // Will register when proto is generated
+// ── Internal API handlers ────────────────────────────────────────────────────
 
-	// Register admin API service
-	adminAPI := NewAdminAPI(s.storage, s.membership, s.nodeID, s.version, s.startTime)
-	_ = adminAPI // Will register when proto is generated
+func (s *Server) handleInternalReplicate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req ReplicateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.internalAPI.Replicate(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, resp)
+}
 
-	// Register internal API service
-	internalAPI := NewInternalAPI(s.storage, s.membership)
-	_ = internalAPI // Will register when proto is generated
+func (s *Server) handleInternalRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req InternalReadReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.internalAPI.Read(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleInternalHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req HeartbeatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.internalAPI.Heartbeat(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleInternalMerkleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req GetMerkleRootReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.internalAPI.GetMerkleRoot(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleInternalNotifyLeaving(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req NotifyLeavingReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.internalAPI.NotifyLeaving(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleAdminBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		DestDir string `json:"dest_dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	archivePath, err := s.adminAPI.BackupDB(req.DestDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"archive": archivePath})
+}
+
+func (s *Server) handleAdminRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ArchiveFile string `json:"archive_file"`
+		DestDataDir string `json:"dest_data_dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.adminAPI.RestoreDB(req.ArchiveFile, req.DestDataDir); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		fmt.Printf("writeJSON encode error: %v\n", err)
+	}
 }
 
 // Stop gracefully stops the server
 func (s *Server) Stop() {
 	close(s.stopCh)
 
-	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Stop HTTP server
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			fmt.Printf("HTTP server shutdown error: %v\n", err)
 		}
 	}
 
-	// Stop gRPC server
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
 	}

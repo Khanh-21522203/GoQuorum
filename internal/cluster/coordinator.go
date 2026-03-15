@@ -8,18 +8,20 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"time"
 )
 
 type Coordinator struct {
-	nodeID       common.NodeID
-	ring         *HashRing
-	storage      *storage.Storage
-	rpc          RPCClient
-	membership   *MembershipManager
-	readRepairer *ReadRepairer
-	antiEntropy  *AntiEntropy
+	nodeID        common.NodeID
+	ring          *HashRing
+	storage       *storage.Storage
+	rpc           RPCClient
+	membership    *MembershipManager
+	readRepairer  *ReadRepairer
+	antiEntropy   *AntiEntropy
+	hintedHandoff *HintedHandoff
 
 	// Configuration
 	quorumConfig     config.QuorumConfig
@@ -28,6 +30,9 @@ type Coordinator struct {
 
 	// Concurrency control (Section 7.1)
 	keyLocks sync.Map // map[string]*sync.Mutex
+
+	// In-flight request tracking for graceful shutdown
+	inFlight atomic.Int64
 
 	// Metrics (Section 9)
 	metrics *CoordinatorMetrics
@@ -73,6 +78,9 @@ func NewCoordinator(
 
 // Start starts coordinator and anti-entropy
 func (c *Coordinator) Start() error {
+	if c.hintedHandoff != nil {
+		c.hintedHandoff.Start()
+	}
 	// Start anti-entropy background service
 	return c.antiEntropy.Start()
 }
@@ -80,11 +88,40 @@ func (c *Coordinator) Start() error {
 // Stop stops coordinator and anti-entropy
 func (c *Coordinator) Stop() {
 	c.antiEntropy.Stop()
+	if c.hintedHandoff != nil {
+		c.hintedHandoff.Stop()
+	}
 }
 
-// Put writes key-value with W quorum (Section 3.1)
+// SetHintedHandoff attaches a HintedHandoff instance to this coordinator.
+// Call this before Start() if hinted handoff is desired.
+func (c *Coordinator) SetHintedHandoff(hh *HintedHandoff) {
+	c.hintedHandoff = hh
+}
+
+// GetMerkleRoot returns the current Merkle tree root hash for anti-entropy.
+func (c *Coordinator) GetMerkleRoot() []byte {
+	return c.antiEntropy.GetMerkleRoot()
+}
+
+// InFlightCount returns the number of currently executing requests.
+// Used by graceful shutdown to wait for in-flight requests to complete.
+func (c *Coordinator) InFlightCount() int64 {
+	return c.inFlight.Load()
+}
+
+// PutOptions holds optional parameters for a Put operation.
+type PutOptions struct {
+	TTLSeconds int64 // 0 = no TTL; >0 = key expires this many seconds from now
+}
+
+// Put writes key-value with W quorum (Section 3.1).
+// An optional PutOptions may be passed to set TTL.
 func (c *Coordinator) Put(ctx context.Context, key string, value []byte,
-	context vclock.VectorClock) (vclock.VectorClock, error) {
+	context vclock.VectorClock, opts ...PutOptions) (vclock.VectorClock, error) {
+	c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
+
 	start := time.Now()
 	defer func() {
 		c.metrics.WriteLatency.Observe(time.Since(start).Seconds())
@@ -106,11 +143,16 @@ func (c *Coordinator) Put(ctx context.Context, key string, value []byte,
 	newVClock.Tick(c.nodeID)
 
 	// 3. Build stored record (Section 3.1)
+	var expiresAt int64
+	if len(opts) > 0 && opts[0].TTLSeconds > 0 {
+		expiresAt = time.Now().Unix() + opts[0].TTLSeconds
+	}
 	sibling := storage.Sibling{
 		Value:     value,
 		VClock:    newVClock,
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: time.Now().Unix(), // Unix seconds; consistent with GC and tombstone timestamps
 		Tombstone: false,
+		ExpiresAt: expiresAt,
 	}
 	siblingSet := &storage.SiblingSet{
 		Siblings: []storage.Sibling{sibling},
@@ -149,6 +191,39 @@ func (c *Coordinator) Put(ctx context.Context, key string, value []byte,
 		return newVClock, nil // Success
 	}
 
+	// 7a. Sloppy quorum: try overflow nodes when strict quorum fails (Section 5.2)
+	if c.quorumConfig.SloppyQuorum && successCount < c.quorumConfig.W {
+		need := c.quorumConfig.W - successCount
+		extList, extErr := c.ring.GetExtendedPreferenceList(key, c.quorumConfig.N, need)
+		if extErr == nil && len(extList) > c.quorumConfig.N {
+			// Identify overflow candidates (nodes beyond the strict preference list)
+			strictSet := make(map[common.NodeID]struct{}, len(prefList))
+			for _, nid := range prefList {
+				strictSet[nid] = struct{}{}
+			}
+			overflowNodes := make([]common.NodeID, 0, need)
+			for _, nid := range extList[c.quorumConfig.N:] {
+				if _, inStrict := strictSet[nid]; !inStrict {
+					overflowNodes = append(overflowNodes, nid)
+				}
+			}
+			if len(overflowNodes) > 0 {
+				overflowResps := c.parallelWrite(ctx, overflowNodes, keyBytes, siblingSet)
+				for _, resp := range overflowResps {
+					if resp.Error == nil {
+						successCount++
+					}
+				}
+			}
+		}
+	}
+
+	if successCount >= c.quorumConfig.W {
+		go c.antiEntropy.OnKeyUpdate(keyBytes, siblingSet)
+		c.metrics.WriteSuccess.Inc()
+		return newVClock, nil // Sloppy quorum success
+	}
+
 	// Quorum not reached (Section 3.4)
 	c.metrics.WriteQuorumFailures.Inc()
 	return vclock.VectorClock{}, &common.QuorumError{
@@ -167,11 +242,15 @@ func (c *Coordinator) parallelWrite(
 	key []byte,
 	siblings *storage.SiblingSet) []WriteResponse {
 
+	// Buffer is sized for all replicas so goroutines never block on send.
 	respChan := make(chan WriteResponse, len(prefList))
 
+	var wg sync.WaitGroup
 	// Fan out to all replicas concurrently
 	for _, nodeID := range prefList {
+		wg.Add(1)
 		go func(nid common.NodeID) {
+			defer wg.Done()
 			writeCtx, cancel := context.WithTimeout(ctx, c.timeoutConfig.ReplicaTimeout)
 			defer cancel()
 
@@ -186,34 +265,26 @@ func (c *Coordinator) parallelWrite(
 				err = c.rpc.RemotePut(writeCtx, nid, key, siblings)
 			}
 
-			select {
-			case respChan <- WriteResponse{NodeID: nid, Error: err}:
-			case <-writeCtx.Done():
-			}
+			respChan <- WriteResponse{NodeID: nid, Error: err}
 		}(nodeID)
 	}
 
-	// Collect responses with early return (Section 8.3)
+	// Collect all responses — buffered channel ensures goroutines never block.
+	// We wait for all goroutines so no writes leak past the caller's lifetime.
+	wg.Wait()
+
 	responses := make([]WriteResponse, 0, len(prefList))
-	timeout := time.After(c.timeoutConfig.ReplicaTimeout)
-
 	for i := 0; i < len(prefList); i++ {
-		select {
-		case resp := <-respChan:
-			responses = append(responses, resp)
+		responses = append(responses, <-respChan)
+	}
 
-			// Early return if W quorum already met
-			if countSuccesses(responses) >= c.quorumConfig.W {
-				go drainChannel(respChan, len(prefList)-i-1)
-				return responses
+	// Store hints for failed remote writes so they can be replayed once the
+	// target node recovers (Section 5A: Hinted Handoff).
+	if c.hintedHandoff != nil {
+		for _, resp := range responses {
+			if resp.Error != nil && resp.NodeID != c.nodeID {
+				c.hintedHandoff.StoreHint(resp.NodeID, key, siblings) //nolint:errcheck
 			}
-
-		case <-timeout:
-			go drainChannel(respChan, len(prefList)-i)
-			return responses
-
-		case <-ctx.Done():
-			return responses
 		}
 	}
 
@@ -240,6 +311,9 @@ func (c *Coordinator) getKeyLock(key []byte) *sync.Mutex {
 
 // Get reads key with R quorum (Section 4.1)
 func (c *Coordinator) Get(ctx context.Context, key string) ([]storage.Sibling, error) {
+	c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
+
 	start := time.Now()
 	defer func() {
 		c.metrics.ReadLatency.Observe(time.Since(start).Seconds())
@@ -342,8 +416,11 @@ func (c *Coordinator) parallelRead(
 
 			// Section 8.1: Fast path for coordinator-is-replica
 			if nid == c.nodeID {
-				// Local read (no RPC)
-				siblingSet, err = c.storage.Get(key)
+				// Local read — use GetRaw so tombstones are visible for read repair
+				siblingSet, err = c.storage.GetRaw(key)
+				if err == common.ErrKeyNotFound {
+					err = nil // "not found" is a valid replica response
+				}
 			} else {
 				// Remote RPC call
 				siblingSet, err = c.rpc.RemoteGet(readCtx, nid, key)
@@ -450,6 +527,8 @@ func (c *Coordinator) filterTombstones(siblings []storage.Sibling) []storage.Sib
 
 // Delete creates a tombstone with W quorum (Section 5.1)
 func (c *Coordinator) Delete(ctx context.Context, key string, context vclock.VectorClock) error {
+	c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
 
 	c.metrics.DeleteRequestsTotal.Inc()
 
@@ -465,7 +544,7 @@ func (c *Coordinator) Delete(ctx context.Context, key string, context vclock.Vec
 	tombstone := storage.Sibling{
 		Value:     []byte{}, // Empty value
 		VClock:    newVClock,
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: time.Now().Unix(), // Use Unix seconds so GC can compare correctly
 		Tombstone: true,
 	}
 
@@ -480,8 +559,8 @@ func (c *Coordinator) Delete(ctx context.Context, key string, context vclock.Vec
 		return fmt.Errorf("get preference list: %w", err)
 	}
 
-	// Read old value for Merkle tree removal
-	oldSiblings, _ := c.storage.Get(keyBytes)
+	// Read old value for Merkle tree removal (use GetRaw to see tombstones)
+	oldSiblings, _ := c.storage.GetRaw(keyBytes)
 
 	responses := c.parallelWrite(ctx, prefList, keyBytes, siblingSet)
 
@@ -499,6 +578,59 @@ func (c *Coordinator) Delete(ctx context.Context, key string, context vclock.Vec
 		Achieved:  successCount,
 		Operation: "delete",
 	}
+}
+
+// BatchGetResult holds the result of a single key lookup in a batch.
+type BatchGetResult struct {
+	Key      string
+	Siblings []storage.Sibling
+	Error    error
+}
+
+// BatchPutItem holds a single write item for a batch put.
+type BatchPutItem struct {
+	Key     string
+	Value   []byte
+	Context vclock.VectorClock
+}
+
+// BatchPutResult holds the result of a single write in a batch.
+type BatchPutResult struct {
+	Key        string
+	NewContext vclock.VectorClock
+	Error      error
+}
+
+// BatchGet reads multiple keys concurrently.
+func (c *Coordinator) BatchGet(ctx context.Context, keys []string) []BatchGetResult {
+	results := make([]BatchGetResult, len(keys))
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		go func(idx int, k string) {
+			defer wg.Done()
+			siblings, err := c.Get(ctx, k)
+			results[idx] = BatchGetResult{Key: k, Siblings: siblings, Error: err}
+		}(i, key)
+	}
+	wg.Wait()
+	return results
+}
+
+// BatchPut writes multiple keys concurrently.
+func (c *Coordinator) BatchPut(ctx context.Context, items []BatchPutItem) []BatchPutResult {
+	results := make([]BatchPutResult, len(items))
+	var wg sync.WaitGroup
+	for i, item := range items {
+		wg.Add(1)
+		go func(idx int, it BatchPutItem) {
+			defer wg.Done()
+			newVC, err := c.Put(ctx, it.Key, it.Value, it.Context)
+			results[idx] = BatchPutResult{Key: it.Key, NewContext: newVC, Error: err}
+		}(i, item)
+	}
+	wg.Wait()
+	return results
 }
 
 type WriteResponse struct {

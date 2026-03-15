@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: internal.proto
 
-package internalv1
+package cluster
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -471,7 +471,7 @@ type HeartbeatRequest struct {
 	SenderId      string                 `protobuf:"bytes,1,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
 	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Status        NodeStatus             `protobuf:"varint,4,opt,name=status,proto3,enum=goquorum.internal.v1.NodeStatus" json:"status,omitempty"`
+	Status        NodeStatus             `protobuf:"varint,4,opt,name=status,proto3,enum=goquorum.cluster.NodeStatus" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -538,7 +538,7 @@ type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ResponderId   string                 `protobuf:"bytes,1,opt,name=responder_id,json=responderId,proto3" json:"responder_id,omitempty"`
 	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Status        NodeStatus             `protobuf:"varint,3,opt,name=status,proto3,enum=goquorum.internal.v1.NodeStatus" json:"status,omitempty"`
+	Status        NodeStatus             `protobuf:"varint,3,opt,name=status,proto3,enum=goquorum.cluster.NodeStatus" json:"status,omitempty"`
 	Peers         []*PeerStatusInfo      `protobuf:"bytes,4,rep,name=peers,proto3" json:"peers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -605,7 +605,7 @@ func (x *HeartbeatResponse) GetPeers() []*PeerStatusInfo {
 type PeerStatusInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Status        NodeStatus             `protobuf:"varint,2,opt,name=status,proto3,enum=goquorum.internal.v1.NodeStatus" json:"status,omitempty"`
+	Status        NodeStatus             `protobuf:"varint,2,opt,name=status,proto3,enum=goquorum.cluster.NodeStatus" json:"status,omitempty"`
 	LastSeen      int64                  `protobuf:"varint,3,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -668,7 +668,7 @@ type AntiEntropyRequest struct {
 	RangeStart    []byte                 `protobuf:"bytes,2,opt,name=range_start,json=rangeStart,proto3" json:"range_start,omitempty"` // Key range start (inclusive)
 	RangeEnd      []byte                 `protobuf:"bytes,3,opt,name=range_end,json=rangeEnd,proto3" json:"range_end,omitempty"`       // Key range end (exclusive)
 	MerkleRoot    []byte                 `protobuf:"bytes,4,opt,name=merkle_root,json=merkleRoot,proto3" json:"merkle_root,omitempty"` // Merkle tree root hash
-	Phase         AntiEntropyPhase       `protobuf:"varint,5,opt,name=phase,proto3,enum=goquorum.internal.v1.AntiEntropyPhase" json:"phase,omitempty"`
+	Phase         AntiEntropyPhase       `protobuf:"varint,5,opt,name=phase,proto3,enum=goquorum.cluster.AntiEntropyPhase" json:"phase,omitempty"`
 	TreeHashes    [][]byte               `protobuf:"bytes,6,rep,name=tree_hashes,json=treeHashes,proto3" json:"tree_hashes,omitempty"` // For tree traversal
 	Level         int32                  `protobuf:"varint,7,opt,name=level,proto3" json:"level,omitempty"`                            // Current tree level
 	unknownFields protoimpl.UnknownFields
@@ -990,16 +990,16 @@ var File_internal_proto protoreflect.FileDescriptor
 
 const file_internal_proto_rawDesc = "" +
 	"\n" +
-	"\x0einternal.proto\x12\x14goquorum.internal.v1\"\xa7\x01\n" +
+	"\x0einternal.proto\x12\x10goquorum.cluster\"\xa3\x01\n" +
 	"\x10ReplicateRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\x12;\n" +
-	"\asibling\x18\x02 \x01(\v2!.goquorum.internal.v1.SiblingDataR\asibling\x12%\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x127\n" +
+	"\asibling\x18\x02 \x01(\v2\x1d.goquorum.cluster.SiblingDataR\asibling\x12%\n" +
 	"\x0ecoordinator_id\x18\x03 \x01(\tR\rcoordinatorId\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x04 \x01(\x03R\trequestId\"\x9d\x01\n" +
+	"request_id\x18\x04 \x01(\x03R\trequestId\"\x99\x01\n" +
 	"\vSiblingData\x12\x14\n" +
-	"\x05value\x18\x01 \x01(\fR\x05value\x12<\n" +
-	"\acontext\x18\x02 \x03(\v2\".goquorum.internal.v1.ContextEntryR\acontext\x12\x1c\n" +
+	"\x05value\x18\x01 \x01(\fR\x05value\x128\n" +
+	"\acontext\x18\x02 \x03(\v2\x1e.goquorum.cluster.ContextEntryR\acontext\x12\x1c\n" +
 	"\ttombstone\x18\x03 \x01(\bR\ttombstone\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"A\n" +
 	"\fContextEntry\x12\x17\n" +
@@ -1010,46 +1010,46 @@ const file_internal_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"N\n" +
 	"\x13InternalReadRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12%\n" +
-	"\x0ecoordinator_id\x18\x02 \x01(\tR\rcoordinatorId\"k\n" +
-	"\x14InternalReadResponse\x12=\n" +
-	"\bsiblings\x18\x01 \x03(\v2!.goquorum.internal.v1.SiblingDataR\bsiblings\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found\"\xa1\x01\n" +
+	"\x0ecoordinator_id\x18\x02 \x01(\tR\rcoordinatorId\"g\n" +
+	"\x14InternalReadResponse\x129\n" +
+	"\bsiblings\x18\x01 \x03(\v2\x1d.goquorum.cluster.SiblingDataR\bsiblings\x12\x14\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"\x9d\x01\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tsender_id\x18\x01 \x01(\tR\bsenderId\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\tR\aversion\x128\n" +
-	"\x06status\x18\x04 \x01(\x0e2 .goquorum.internal.v1.NodeStatusR\x06status\"\xca\x01\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x124\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1c.goquorum.cluster.NodeStatusR\x06status\"\xc2\x01\n" +
 	"\x11HeartbeatResponse\x12!\n" +
 	"\fresponder_id\x18\x01 \x01(\tR\vresponderId\x12\x1c\n" +
-	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x128\n" +
-	"\x06status\x18\x03 \x01(\x0e2 .goquorum.internal.v1.NodeStatusR\x06status\x12:\n" +
-	"\x05peers\x18\x04 \x03(\v2$.goquorum.internal.v1.PeerStatusInfoR\x05peers\"\x80\x01\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x124\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1c.goquorum.cluster.NodeStatusR\x06status\x126\n" +
+	"\x05peers\x18\x04 \x03(\v2 .goquorum.cluster.PeerStatusInfoR\x05peers\"|\n" +
 	"\x0ePeerStatusInfo\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x128\n" +
-	"\x06status\x18\x02 \x01(\x0e2 .goquorum.internal.v1.NodeStatusR\x06status\x12\x1b\n" +
-	"\tlast_seen\x18\x03 \x01(\x03R\blastSeen\"\x85\x02\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x124\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1c.goquorum.cluster.NodeStatusR\x06status\x12\x1b\n" +
+	"\tlast_seen\x18\x03 \x01(\x03R\blastSeen\"\x81\x02\n" +
 	"\x12AntiEntropyRequest\x12\x1b\n" +
 	"\tsender_id\x18\x01 \x01(\tR\bsenderId\x12\x1f\n" +
 	"\vrange_start\x18\x02 \x01(\fR\n" +
 	"rangeStart\x12\x1b\n" +
 	"\trange_end\x18\x03 \x01(\fR\brangeEnd\x12\x1f\n" +
 	"\vmerkle_root\x18\x04 \x01(\fR\n" +
-	"merkleRoot\x12<\n" +
-	"\x05phase\x18\x05 \x01(\x0e2&.goquorum.internal.v1.AntiEntropyPhaseR\x05phase\x12\x1f\n" +
+	"merkleRoot\x128\n" +
+	"\x05phase\x18\x05 \x01(\x0e2\".goquorum.cluster.AntiEntropyPhaseR\x05phase\x12\x1f\n" +
 	"\vtree_hashes\x18\x06 \x03(\fR\n" +
 	"treeHashes\x12\x14\n" +
-	"\x05level\x18\a \x01(\x05R\x05level\"\xa6\x01\n" +
+	"\x05level\x18\a \x01(\x05R\x05level\"\xa2\x01\n" +
 	"\x13AntiEntropyResponse\x12\x17\n" +
 	"\ain_sync\x18\x01 \x01(\bR\x06inSync\x12\x1f\n" +
 	"\vmerkle_root\x18\x02 \x01(\fR\n" +
 	"merkleRoot\x12\x1f\n" +
 	"\vtree_hashes\x18\x03 \x03(\fR\n" +
-	"treeHashes\x124\n" +
-	"\x04keys\x18\x04 \x03(\v2 .goquorum.internal.v1.KeyVersionR\x04keys\"\xae\x01\n" +
+	"treeHashes\x120\n" +
+	"\x04keys\x18\x04 \x03(\v2\x1c.goquorum.cluster.KeyVersionR\x04keys\"\xaa\x01\n" +
 	"\n" +
 	"KeyVersion\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\x12<\n" +
-	"\acontext\x18\x02 \x03(\v2\".goquorum.internal.v1.ContextEntryR\acontext\x12\x1c\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x128\n" +
+	"\acontext\x18\x02 \x03(\v2\x1e.goquorum.cluster.ContextEntryR\acontext\x12\x1c\n" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x14\n" +
 	"\x05value\x18\x04 \x01(\fR\x05value\x12\x1c\n" +
 	"\ttombstone\x18\x05 \x01(\bR\ttombstone\"3\n" +
@@ -1067,13 +1067,13 @@ const file_internal_proto_rawDesc = "" +
 	"\x10AntiEntropyPhase\x12\x10\n" +
 	"\fCOMPARE_ROOT\x10\x00\x12\x11\n" +
 	"\rCOMPARE_LEVEL\x10\x01\x12\x11\n" +
-	"\rEXCHANGE_KEYS\x10\x022\x83\x04\n" +
-	"\x10GoQuorumInternal\x12\\\n" +
-	"\tReplicate\x12&.goquorum.internal.v1.ReplicateRequest\x1a'.goquorum.internal.v1.ReplicateResponse\x12]\n" +
-	"\x04Read\x12).goquorum.internal.v1.InternalReadRequest\x1a*.goquorum.internal.v1.InternalReadResponse\x12\\\n" +
-	"\tHeartbeat\x12&.goquorum.internal.v1.HeartbeatRequest\x1a'.goquorum.internal.v1.HeartbeatResponse\x12j\n" +
-	"\x13AntiEntropyExchange\x12(.goquorum.internal.v1.AntiEntropyRequest\x1a).goquorum.internal.v1.AntiEntropyResponse\x12h\n" +
-	"\rGetMerkleRoot\x12*.goquorum.internal.v1.GetMerkleRootRequest\x1a+.goquorum.internal.v1.GetMerkleRootResponseB%Z#GoQuorum/api/internal/v1;internalv1b\x06proto3"
+	"\rEXCHANGE_KEYS\x10\x022\xdb\x03\n" +
+	"\x10GoQuorumInternal\x12T\n" +
+	"\tReplicate\x12\".goquorum.cluster.ReplicateRequest\x1a#.goquorum.cluster.ReplicateResponse\x12U\n" +
+	"\x04Read\x12%.goquorum.cluster.InternalReadRequest\x1a&.goquorum.cluster.InternalReadResponse\x12T\n" +
+	"\tHeartbeat\x12\".goquorum.cluster.HeartbeatRequest\x1a#.goquorum.cluster.HeartbeatResponse\x12b\n" +
+	"\x13AntiEntropyExchange\x12$.goquorum.cluster.AntiEntropyRequest\x1a%.goquorum.cluster.AntiEntropyResponse\x12`\n" +
+	"\rGetMerkleRoot\x12&.goquorum.cluster.GetMerkleRootRequest\x1a'.goquorum.cluster.GetMerkleRootResponseB\x1eZ\x1cGoQuorum/api/cluster;clusterb\x06proto3"
 
 var (
 	file_internal_proto_rawDescOnce sync.Once
@@ -1090,44 +1090,44 @@ func file_internal_proto_rawDescGZIP() []byte {
 var file_internal_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_internal_proto_goTypes = []any{
-	(NodeStatus)(0),               // 0: goquorum.internal.v1.NodeStatus
-	(AntiEntropyPhase)(0),         // 1: goquorum.internal.v1.AntiEntropyPhase
-	(*ReplicateRequest)(nil),      // 2: goquorum.internal.v1.ReplicateRequest
-	(*SiblingData)(nil),           // 3: goquorum.internal.v1.SiblingData
-	(*ContextEntry)(nil),          // 4: goquorum.internal.v1.ContextEntry
-	(*ReplicateResponse)(nil),     // 5: goquorum.internal.v1.ReplicateResponse
-	(*InternalReadRequest)(nil),   // 6: goquorum.internal.v1.InternalReadRequest
-	(*InternalReadResponse)(nil),  // 7: goquorum.internal.v1.InternalReadResponse
-	(*HeartbeatRequest)(nil),      // 8: goquorum.internal.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),     // 9: goquorum.internal.v1.HeartbeatResponse
-	(*PeerStatusInfo)(nil),        // 10: goquorum.internal.v1.PeerStatusInfo
-	(*AntiEntropyRequest)(nil),    // 11: goquorum.internal.v1.AntiEntropyRequest
-	(*AntiEntropyResponse)(nil),   // 12: goquorum.internal.v1.AntiEntropyResponse
-	(*KeyVersion)(nil),            // 13: goquorum.internal.v1.KeyVersion
-	(*GetMerkleRootRequest)(nil),  // 14: goquorum.internal.v1.GetMerkleRootRequest
-	(*GetMerkleRootResponse)(nil), // 15: goquorum.internal.v1.GetMerkleRootResponse
+	(NodeStatus)(0),               // 0: goquorum.cluster.NodeStatus
+	(AntiEntropyPhase)(0),         // 1: goquorum.cluster.AntiEntropyPhase
+	(*ReplicateRequest)(nil),      // 2: goquorum.cluster.ReplicateRequest
+	(*SiblingData)(nil),           // 3: goquorum.cluster.SiblingData
+	(*ContextEntry)(nil),          // 4: goquorum.cluster.ContextEntry
+	(*ReplicateResponse)(nil),     // 5: goquorum.cluster.ReplicateResponse
+	(*InternalReadRequest)(nil),   // 6: goquorum.cluster.InternalReadRequest
+	(*InternalReadResponse)(nil),  // 7: goquorum.cluster.InternalReadResponse
+	(*HeartbeatRequest)(nil),      // 8: goquorum.cluster.HeartbeatRequest
+	(*HeartbeatResponse)(nil),     // 9: goquorum.cluster.HeartbeatResponse
+	(*PeerStatusInfo)(nil),        // 10: goquorum.cluster.PeerStatusInfo
+	(*AntiEntropyRequest)(nil),    // 11: goquorum.cluster.AntiEntropyRequest
+	(*AntiEntropyResponse)(nil),   // 12: goquorum.cluster.AntiEntropyResponse
+	(*KeyVersion)(nil),            // 13: goquorum.cluster.KeyVersion
+	(*GetMerkleRootRequest)(nil),  // 14: goquorum.cluster.GetMerkleRootRequest
+	(*GetMerkleRootResponse)(nil), // 15: goquorum.cluster.GetMerkleRootResponse
 }
 var file_internal_proto_depIdxs = []int32{
-	3,  // 0: goquorum.internal.v1.ReplicateRequest.sibling:type_name -> goquorum.internal.v1.SiblingData
-	4,  // 1: goquorum.internal.v1.SiblingData.context:type_name -> goquorum.internal.v1.ContextEntry
-	3,  // 2: goquorum.internal.v1.InternalReadResponse.siblings:type_name -> goquorum.internal.v1.SiblingData
-	0,  // 3: goquorum.internal.v1.HeartbeatRequest.status:type_name -> goquorum.internal.v1.NodeStatus
-	0,  // 4: goquorum.internal.v1.HeartbeatResponse.status:type_name -> goquorum.internal.v1.NodeStatus
-	10, // 5: goquorum.internal.v1.HeartbeatResponse.peers:type_name -> goquorum.internal.v1.PeerStatusInfo
-	0,  // 6: goquorum.internal.v1.PeerStatusInfo.status:type_name -> goquorum.internal.v1.NodeStatus
-	1,  // 7: goquorum.internal.v1.AntiEntropyRequest.phase:type_name -> goquorum.internal.v1.AntiEntropyPhase
-	13, // 8: goquorum.internal.v1.AntiEntropyResponse.keys:type_name -> goquorum.internal.v1.KeyVersion
-	4,  // 9: goquorum.internal.v1.KeyVersion.context:type_name -> goquorum.internal.v1.ContextEntry
-	2,  // 10: goquorum.internal.v1.GoQuorumInternal.Replicate:input_type -> goquorum.internal.v1.ReplicateRequest
-	6,  // 11: goquorum.internal.v1.GoQuorumInternal.Read:input_type -> goquorum.internal.v1.InternalReadRequest
-	8,  // 12: goquorum.internal.v1.GoQuorumInternal.Heartbeat:input_type -> goquorum.internal.v1.HeartbeatRequest
-	11, // 13: goquorum.internal.v1.GoQuorumInternal.AntiEntropyExchange:input_type -> goquorum.internal.v1.AntiEntropyRequest
-	14, // 14: goquorum.internal.v1.GoQuorumInternal.GetMerkleRoot:input_type -> goquorum.internal.v1.GetMerkleRootRequest
-	5,  // 15: goquorum.internal.v1.GoQuorumInternal.Replicate:output_type -> goquorum.internal.v1.ReplicateResponse
-	7,  // 16: goquorum.internal.v1.GoQuorumInternal.Read:output_type -> goquorum.internal.v1.InternalReadResponse
-	9,  // 17: goquorum.internal.v1.GoQuorumInternal.Heartbeat:output_type -> goquorum.internal.v1.HeartbeatResponse
-	12, // 18: goquorum.internal.v1.GoQuorumInternal.AntiEntropyExchange:output_type -> goquorum.internal.v1.AntiEntropyResponse
-	15, // 19: goquorum.internal.v1.GoQuorumInternal.GetMerkleRoot:output_type -> goquorum.internal.v1.GetMerkleRootResponse
+	3,  // 0: goquorum.cluster.ReplicateRequest.sibling:type_name -> goquorum.cluster.SiblingData
+	4,  // 1: goquorum.cluster.SiblingData.context:type_name -> goquorum.cluster.ContextEntry
+	3,  // 2: goquorum.cluster.InternalReadResponse.siblings:type_name -> goquorum.cluster.SiblingData
+	0,  // 3: goquorum.cluster.HeartbeatRequest.status:type_name -> goquorum.cluster.NodeStatus
+	0,  // 4: goquorum.cluster.HeartbeatResponse.status:type_name -> goquorum.cluster.NodeStatus
+	10, // 5: goquorum.cluster.HeartbeatResponse.peers:type_name -> goquorum.cluster.PeerStatusInfo
+	0,  // 6: goquorum.cluster.PeerStatusInfo.status:type_name -> goquorum.cluster.NodeStatus
+	1,  // 7: goquorum.cluster.AntiEntropyRequest.phase:type_name -> goquorum.cluster.AntiEntropyPhase
+	13, // 8: goquorum.cluster.AntiEntropyResponse.keys:type_name -> goquorum.cluster.KeyVersion
+	4,  // 9: goquorum.cluster.KeyVersion.context:type_name -> goquorum.cluster.ContextEntry
+	2,  // 10: goquorum.cluster.GoQuorumInternal.Replicate:input_type -> goquorum.cluster.ReplicateRequest
+	6,  // 11: goquorum.cluster.GoQuorumInternal.Read:input_type -> goquorum.cluster.InternalReadRequest
+	8,  // 12: goquorum.cluster.GoQuorumInternal.Heartbeat:input_type -> goquorum.cluster.HeartbeatRequest
+	11, // 13: goquorum.cluster.GoQuorumInternal.AntiEntropyExchange:input_type -> goquorum.cluster.AntiEntropyRequest
+	14, // 14: goquorum.cluster.GoQuorumInternal.GetMerkleRoot:input_type -> goquorum.cluster.GetMerkleRootRequest
+	5,  // 15: goquorum.cluster.GoQuorumInternal.Replicate:output_type -> goquorum.cluster.ReplicateResponse
+	7,  // 16: goquorum.cluster.GoQuorumInternal.Read:output_type -> goquorum.cluster.InternalReadResponse
+	9,  // 17: goquorum.cluster.GoQuorumInternal.Heartbeat:output_type -> goquorum.cluster.HeartbeatResponse
+	12, // 18: goquorum.cluster.GoQuorumInternal.AntiEntropyExchange:output_type -> goquorum.cluster.AntiEntropyResponse
+	15, // 19: goquorum.cluster.GoQuorumInternal.GetMerkleRoot:output_type -> goquorum.cluster.GetMerkleRootResponse
 	15, // [15:20] is the sub-list for method output_type
 	10, // [10:15] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name

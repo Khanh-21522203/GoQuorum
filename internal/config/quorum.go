@@ -7,9 +7,10 @@ import (
 
 // QuorumConfig defines N/R/W quorum parameters
 type QuorumConfig struct {
-	N int // Replication factor (total replicas)
-	R int // Read quorum (min successful reads)
-	W int // Write quorum (min successful writes)
+	N            int  // Replication factor (total replicas)
+	R            int  // Read quorum (min successful reads)
+	W            int  // Write quorum (min successful writes)
+	SloppyQuorum bool // If true, use overflow nodes when strict quorum is unachievable
 }
 
 // DefaultQuorumConfig returns safe default configuration

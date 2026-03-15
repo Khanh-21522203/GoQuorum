@@ -1,20 +1,27 @@
 version: v1
 plugins:
   # Generate Go code
+  # out is relative to this file's directory (api/proto/).
+  # paths=import uses go_package to derive the output path relative to <out>:
+  #   goquorum.proto (GoQuorum/api)         → <out>/GoQuorum/api/
+  #   internal.proto (GoQuorum/api/cluster) → <out>/GoQuorum/api/cluster/
+  # With out=../../.., <out> = repo parent dir, so final paths are:
+  #   <repo>/api/goquorum.pb.go
+  #   <repo>/api/cluster/internal.pb.go
   - plugin: buf.build/protocolbuffers/go
-    out: ../v1
+    out: ../../..
     opt:
-      - paths=source_relative
+      - paths=import
 
   # Generate gRPC Go code
   - plugin: buf.build/grpc/go
-    out: ../v1
+    out: ../../..
     opt:
-      - paths=source_relative
+      - paths=import
 
   # Generate grpc-gateway code
   - plugin: buf.build/grpc-ecosystem/gateway
-    out: ../v1
+    out: ../../..
     opt:
-      - paths=source_relative
+      - paths=import
       - generate_unbound_methods=true

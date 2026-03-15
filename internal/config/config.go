@@ -9,6 +9,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// GossipConfig holds tuning parameters for the gossip membership protocol.
+// It mirrors cluster.GossipConfig but lives in the config package to avoid
+// a circular import.
+type GossipConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	FanOut   int           `yaml:"fan_out"`  // peers to gossip to per round (default 3)
+	Interval time.Duration `yaml:"interval"` // gossip period (default 1s)
+}
+
 // Config is the top-level configuration
 type Config struct {
 	Node        NodeConfig        `yaml:"node"`
@@ -19,6 +28,7 @@ type Config struct {
 	AntiEntropy AntiEntropyConfig `yaml:"anti_entropy"`
 	Connection  ConnectionConfig  `yaml:"connection"`
 	Server      ServerConfig      `yaml:"server"`
+	Gossip      GossipConfig      `yaml:"gossip"`
 }
 
 // NodeConfig defines local node settings
@@ -28,10 +38,19 @@ type NodeConfig struct {
 	LogLevel string        `yaml:"log_level"`
 }
 
+// RateLimitConfig controls token-bucket rate limiting on the gRPC server.
+type RateLimitConfig struct {
+	GlobalRPS   float64 `yaml:"global_rps"`   // 0 = disabled
+	PerIPRPS    float64 `yaml:"per_ip_rps"`   // 0 = no per-IP limit
+	BurstFactor float64 `yaml:"burst_factor"` // default 1.0
+}
+
 // ServerConfig defines gRPC/HTTP server settings
 type ServerConfig struct {
-	GRPCAddr string `yaml:"grpc_addr"`
-	HTTPAddr string `yaml:"http_addr"`
+	GRPCAddr  string          `yaml:"grpc_addr"`
+	HTTPAddr  string          `yaml:"http_addr"`
+	TLS       TLSConfig       `yaml:"tls"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
 // LoadConfig loads configuration from YAML file
@@ -115,6 +134,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Server.HTTPAddr == "" {
 		c.Server.HTTPAddr = ":8080"
+	}
+
+	// Gossip defaults
+	if c.Gossip.FanOut == 0 {
+		c.Gossip.FanOut = 3
+	}
+	if c.Gossip.Interval == 0 {
+		c.Gossip.Interval = 1 * time.Second
 	}
 }
 

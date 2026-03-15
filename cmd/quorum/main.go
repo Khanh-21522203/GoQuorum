@@ -101,15 +101,38 @@ func main() {
 	failureDetector := cluster.NewFailureDetector(fdConfig, membership, rpcClient)
 	fmt.Println("Failure detector initialized")
 
+	// Initialize gossip
+	gossipCfg := cluster.GossipConfigFromConfig(cfg.Gossip)
+	gossip := cluster.NewGossip(cfg.Node.NodeID, cfg.Server.HTTPAddr, membership, gossipCfg)
+	gossip.Start()
+	defer gossip.Stop()
+	fmt.Println("Gossip initialized")
+
+	// Initialize hinted handoff
+	hintedHandoff := cluster.NewHintedHandoff(membership, rpcClient, cfg.Node.NodeID)
+	coordinator.SetHintedHandoff(hintedHandoff)
+	fmt.Println("Hinted handoff initialized")
+
+	// Initialize TTL sweeper
+	ttlSweeper := cluster.NewTTLSweeper(store, coordinator, 0)
+	ttlSweeper.Start()
+	defer ttlSweeper.Stop()
+	fmt.Println("TTL sweeper initialized")
+
 	// Initialize server
 	srv := server.NewServer(
 		coordinator,
 		store,
 		membership,
+		ring,
 		cfg.Server,
+		cfg.Node.DataDir,
 		string(cfg.Node.NodeID),
 		Version,
 	)
+
+	// Attach gossip to server before starting
+	srv.SetGossip(gossip)
 
 	// Start server
 	if err := srv.Start(); err != nil {
@@ -132,7 +155,7 @@ func main() {
 	fmt.Println("Cluster bootstrap complete")
 
 	// Initialize graceful shutdown
-	shutdown := cluster.NewGracefulShutdown(store, nil, failureDetector)
+	shutdown := cluster.NewGracefulShutdown(store, coordinator, failureDetector, rpcClient, membership)
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)

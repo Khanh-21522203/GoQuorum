@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package goquorum.internal.v1;
+package goquorum.cluster;
 
-option go_package = "GoQuorum/api/internal/v1;internalv1";
+option go_package = "GoQuorum/api/cluster;cluster";
 
 // ============================================================================
 // Internal Service - Node-to-node communication

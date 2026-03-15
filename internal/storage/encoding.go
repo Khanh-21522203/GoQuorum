@@ -19,6 +19,7 @@ const (
 	// Flags (Section 5.2)
 	FlagTombstone  byte = 1 << 0 // Bit 0: tombstone
 	FlagCompressed byte = 1 << 1 // Bit 1: compressed (future)
+	FlagTTL        byte = 1 << 2 // Bit 2: TTL set; ExpiresAt (8 bytes) follows timestamp
 
 	// Limits (Section 2 & 3)
 	MaxKeySize   = 65536   // 64 KB
@@ -88,13 +89,23 @@ func encodeSiblingSet(set *SiblingSet) ([]byte, error) {
 		if sib.Tombstone {
 			flags |= FlagTombstone
 		}
+		if sib.ExpiresAt != 0 {
+			flags |= FlagTTL
+		}
 		if err := buf.WriteByte(flags); err != nil {
 			return nil, err
 		}
 
-		// timestamp (8 bytes) - Unix nanoseconds (Section 5.1)
+		// timestamp (8 bytes) - Unix seconds (Section 5.1)
 		if err := binary.Write(buf, binary.LittleEndian, sib.Timestamp); err != nil {
 			return nil, err
+		}
+
+		// expires_at (8 bytes) — only present when FlagTTL is set
+		if sib.ExpiresAt != 0 {
+			if err := binary.Write(buf, binary.LittleEndian, sib.ExpiresAt); err != nil {
+				return nil, err
+			}
 		}
 
 		// value_len (4 bytes)
@@ -190,6 +201,14 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 			return nil, fmt.Errorf("read timestamp at sibling %d: %w", i, err)
 		}
 
+		// expires_at (8 bytes) — only present when FlagTTL is set
+		var expiresAt int64
+		if flags&FlagTTL != 0 {
+			if err := binary.Read(buf, binary.LittleEndian, &expiresAt); err != nil {
+				return nil, fmt.Errorf("read expires_at at sibling %d: %w", i, err)
+			}
+		}
+
 		// value_len (4 bytes)
 		var valueLen uint32
 		if err := binary.Read(buf, binary.LittleEndian, &valueLen); err != nil {
@@ -215,6 +234,7 @@ func decodeSiblingSet(data []byte) (*SiblingSet, error) {
 			VClock:    vclock,
 			Timestamp: timestamp,
 			Tombstone: (flags & FlagTombstone) != 0,
+			ExpiresAt: expiresAt,
 		})
 	}
 

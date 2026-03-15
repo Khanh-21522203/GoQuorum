@@ -44,9 +44,8 @@ func Bootstrap(
 	for {
 		select {
 		case <-ticker.C:
-			if membership.HasQuorum() {
-				// Step 6: Transition to ACTIVE (Section 5.1)
-				membership.SetLocalStatus(NodeStatusActive)
+			if membership.ActivateIfQuorum() {
+				// Step 6: Transition to ACTIVE (Section 5.1) - done atomically inside ActivateIfQuorum
 				fmt.Println("✓ Quorum reached - Bootstrap complete")
 				fmt.Println("Node is now ACTIVE")
 				return nil

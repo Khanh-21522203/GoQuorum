@@ -2,11 +2,11 @@
 // source: internal.proto
 
 /*
-Package internalv1 is a reverse proxy.
+Package cluster is a reverse proxy.
 
 It translates gRPC into RESTful JSON APIs.
 */
-package internalv1
+package cluster
 
 import (
 	"context"
@@ -182,7 +182,7 @@ func RegisterGoQuorumInternalHandlerServer(ctx context.Context, mux *runtime.Ser
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Replicate", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Replicate"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Replicate", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Replicate"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -202,7 +202,7 @@ func RegisterGoQuorumInternalHandlerServer(ctx context.Context, mux *runtime.Ser
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Read", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Read"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Read", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Read"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -222,7 +222,7 @@ func RegisterGoQuorumInternalHandlerServer(ctx context.Context, mux *runtime.Ser
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Heartbeat", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Heartbeat"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Heartbeat", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Heartbeat"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -242,7 +242,7 @@ func RegisterGoQuorumInternalHandlerServer(ctx context.Context, mux *runtime.Ser
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/AntiEntropyExchange", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/AntiEntropyExchange"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/AntiEntropyExchange", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/AntiEntropyExchange"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -262,7 +262,7 @@ func RegisterGoQuorumInternalHandlerServer(ctx context.Context, mux *runtime.Ser
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/GetMerkleRoot", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/GetMerkleRoot"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/GetMerkleRoot", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/GetMerkleRoot"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -320,7 +320,7 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Replicate", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Replicate"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Replicate", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Replicate"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -337,7 +337,7 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Read", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Read"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Read", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Read"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -354,7 +354,7 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/Heartbeat", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/Heartbeat"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/Heartbeat", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/Heartbeat"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -371,7 +371,7 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/AntiEntropyExchange", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/AntiEntropyExchange"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/AntiEntropyExchange", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/AntiEntropyExchange"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -388,7 +388,7 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.internal.v1.GoQuorumInternal/GetMerkleRoot", runtime.WithHTTPPathPattern("/goquorum.internal.v1.GoQuorumInternal/GetMerkleRoot"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/goquorum.cluster.GoQuorumInternal/GetMerkleRoot", runtime.WithHTTPPathPattern("/goquorum.cluster.GoQuorumInternal/GetMerkleRoot"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -405,11 +405,11 @@ func RegisterGoQuorumInternalHandlerClient(ctx context.Context, mux *runtime.Ser
 }
 
 var (
-	pattern_GoQuorumInternal_Replicate_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.internal.v1.GoQuorumInternal", "Replicate"}, ""))
-	pattern_GoQuorumInternal_Read_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.internal.v1.GoQuorumInternal", "Read"}, ""))
-	pattern_GoQuorumInternal_Heartbeat_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.internal.v1.GoQuorumInternal", "Heartbeat"}, ""))
-	pattern_GoQuorumInternal_AntiEntropyExchange_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.internal.v1.GoQuorumInternal", "AntiEntropyExchange"}, ""))
-	pattern_GoQuorumInternal_GetMerkleRoot_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.internal.v1.GoQuorumInternal", "GetMerkleRoot"}, ""))
+	pattern_GoQuorumInternal_Replicate_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.cluster.GoQuorumInternal", "Replicate"}, ""))
+	pattern_GoQuorumInternal_Read_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.cluster.GoQuorumInternal", "Read"}, ""))
+	pattern_GoQuorumInternal_Heartbeat_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.cluster.GoQuorumInternal", "Heartbeat"}, ""))
+	pattern_GoQuorumInternal_AntiEntropyExchange_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.cluster.GoQuorumInternal", "AntiEntropyExchange"}, ""))
+	pattern_GoQuorumInternal_GetMerkleRoot_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"goquorum.cluster.GoQuorumInternal", "GetMerkleRoot"}, ""))
 )
 
 var (

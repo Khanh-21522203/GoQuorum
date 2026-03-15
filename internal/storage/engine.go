@@ -33,8 +33,9 @@ type SiblingSet struct {
 type Sibling struct {
 	Value     []byte
 	VClock    vclock.VectorClock
-	Timestamp int64 // Unix timestamp
+	Timestamp int64 // Unix timestamp (seconds)
 	Tombstone bool
+	ExpiresAt int64 // Unix timestamp (seconds); 0 means no TTL
 }
 
 // NewStorage creates a new Pebble-backed storage (Section 7.2)
@@ -89,6 +90,10 @@ func NewStorage(opts StorageOptions) (*Storage, error) {
 
 func (s *Storage) LocalNodeID() common.NodeID { return s.nodeID }
 
+// DB returns the underlying pebble.DB instance.
+// Use this only for low-level operations such as backup checkpointing.
+func (s *Storage) DB() *pebble.DB { return s.db }
+
 func (s *Storage) Get(key []byte) (*SiblingSet, error) {
 	start := time.Now()
 	defer func() {
@@ -125,8 +130,61 @@ func (s *Storage) Get(key []byte) (*SiblingSet, error) {
 
 	// Filter expired tombstones (client-side for Get)
 	filteredSiblings := s.filterTombstones(siblings.Siblings)
+	if len(filteredSiblings) == 0 {
+		return nil, common.ErrKeyNotFound
+	}
 
 	return &SiblingSet{Siblings: filteredSiblings}, nil
+}
+
+// GetRaw reads siblings without filtering tombstones.
+// Use this for internal reads where tombstones must be visible (e.g. read repair, anti-entropy).
+func (s *Storage) GetRaw(key []byte) (*SiblingSet, error) {
+	start := time.Now()
+	defer func() {
+		s.metrics.ReadLatency.Observe(time.Since(start).Seconds())
+	}()
+
+	if s.isClosed() {
+		return nil, common.ErrStorageClosed
+	}
+
+	if err := ValidateKey(key); err != nil {
+		return nil, fmt.Errorf("invalid key: %w", err)
+	}
+
+	data, closer, err := s.db.Get(key)
+	if err == pebble.ErrNotFound {
+		return nil, common.ErrKeyNotFound
+	}
+	if err != nil {
+		s.metrics.ReadErrors.Inc()
+		return nil, fmt.Errorf("pebble get: %w", err)
+	}
+	defer closer.Close()
+
+	s.metrics.BytesRead.Add(float64(len(data)))
+
+	siblings, err := decodeSiblingSet(data)
+	if err != nil {
+		s.metrics.CorruptedReads.Inc()
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	// Lazy TTL expiry: filter siblings whose ExpiresAt has passed.
+	now := time.Now().Unix()
+	filtered := siblings.Siblings[:0]
+	for _, sib := range siblings.Siblings {
+		if sib.ExpiresAt != 0 && now >= sib.ExpiresAt {
+			continue // expired
+		}
+		filtered = append(filtered, sib)
+	}
+	if len(filtered) == 0 {
+		return nil, common.ErrKeyNotFound
+	}
+
+	return &SiblingSet{Siblings: filtered}, nil
 }
 
 // Put stores siblings for a key with vector clock reconciliation (Section 7.1)
@@ -150,8 +208,8 @@ func (s *Storage) Put(key []byte, siblings *SiblingSet) error {
 		}
 	}
 
-	// Read existing siblings
-	existing, err := s.Get(key)
+	// Read existing siblings (raw — tombstones must be visible for reconciliation)
+	existing, err := s.GetRaw(key)
 	if err != nil && err != common.ErrKeyNotFound {
 		return fmt.Errorf("read existing: %w", err)
 	}
@@ -376,7 +434,7 @@ func (s *Storage) runTombstoneGC() {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := iter.Key()
+		key := append([]byte(nil), iter.Key()...) // copy: iter.Key() is only valid until next positioning call
 		siblings, err := decodeSiblingSet(iter.Value())
 		if err != nil {
 			continue
@@ -396,13 +454,17 @@ func (s *Storage) runTombstoneGC() {
 
 		// If we removed any tombstones, rewrite the key
 		if gcCount > 0 {
+			writeOpts := pebble.Sync
+			if !s.opts.SyncWrites {
+				writeOpts = pebble.NoSync
+			}
 			if len(filtered) == 0 {
 				// All siblings were tombstones - delete key
-				s.db.Delete(key, pebble.Sync)
+				s.db.Delete(key, writeOpts) //nolint:errcheck
 			} else {
 				// Rewrite with filtered siblings
 				data, _ := encodeSiblingSet(&SiblingSet{Siblings: filtered})
-				s.db.Set(key, data, pebble.Sync)
+				s.db.Set(key, data, writeOpts) //nolint:errcheck
 			}
 
 			s.metrics.TombstonesGCed.Add(float64(gcCount))

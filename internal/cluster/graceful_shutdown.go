@@ -13,6 +13,8 @@ type GracefulShutdown struct {
 	storage         *storage.Storage
 	coordinator     *Coordinator
 	failureDetector *FailureDetector
+	rpc             RPCClient
+	membership      *MembershipManager
 
 	drainTimeout time.Duration // Default: 30s
 
@@ -23,12 +25,16 @@ type GracefulShutdown struct {
 func NewGracefulShutdown(
 	storage *storage.Storage,
 	coordinator *Coordinator,
-	failureDetector *FailureDetector) *GracefulShutdown {
+	failureDetector *FailureDetector,
+	rpc RPCClient,
+	membership *MembershipManager) *GracefulShutdown {
 
 	return &GracefulShutdown{
 		storage:         storage,
 		coordinator:     coordinator,
 		failureDetector: failureDetector,
+		rpc:             rpc,
+		membership:      membership,
 		drainTimeout:    30 * time.Second,
 	}
 }
@@ -55,18 +61,39 @@ func (gs *GracefulShutdown) Shutdown(ctx context.Context) error {
 	drainCtx, cancel := context.WithTimeout(ctx, gs.drainTimeout)
 	defer cancel()
 
-	// TODO: Track in-flight requests and wait
-	select {
-	case <-drainCtx.Done():
-		fmt.Println("Drain timeout reached, forcing shutdown")
-	case <-time.After(1 * time.Second):
-		// Simplified: just wait 1s for demo
-		fmt.Println("In-flight requests drained")
+	if gs.coordinator != nil {
+		pollTicker := time.NewTicker(10 * time.Millisecond)
+		defer pollTicker.Stop()
+	drainLoop:
+		for {
+			select {
+			case <-drainCtx.Done():
+				fmt.Printf("Drain timeout reached, %d requests still in flight, forcing shutdown\n",
+					gs.coordinator.InFlightCount())
+				break drainLoop
+			case <-pollTicker.C:
+				if gs.coordinator.InFlightCount() == 0 {
+					fmt.Println("In-flight requests drained")
+					break drainLoop
+				}
+			}
+		}
+	} else {
+		fmt.Println("In-flight requests drained (no coordinator)")
 	}
 
 	// Step 3: Notify peers we're leaving (Section 4.1)
 	fmt.Println("Step 3: Notifying peers...")
-	// TODO: Send "leaving" notification via RPC
+	if gs.rpc != nil && gs.membership != nil {
+		notifyCtx, notifyCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer notifyCancel()
+		for _, peerID := range gs.membership.GetAllPeers() {
+			if err := gs.rpc.NotifyLeaving(notifyCtx, peerID); err != nil {
+				fmt.Printf("Failed to notify peer %s of departure: %v\n", peerID, err)
+				// Best-effort: continue notifying other peers
+			}
+		}
+	}
 
 	// Step 4: Close storage (flushes WAL) (Section 4.1)
 	fmt.Println("Step 4: Closing storage (flushing WAL)...")

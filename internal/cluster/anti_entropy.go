@@ -79,12 +79,17 @@ func (ae *AntiEntropy) Stop() {
 	fmt.Println("Anti-entropy service stopped")
 }
 
+// GetMerkleRoot returns the current Merkle tree root hash
+func (ae *AntiEntropy) GetMerkleRoot() []byte {
+	return ae.merkleTree.GetRoot()
+}
+
 // schedulerLoop runs periodic synchronization (Section 4.5)
 func (ae *AntiEntropy) schedulerLoop() {
 	defer ae.wg.Done()
 
 	// Calculate interval per range to spread work evenly
-	numRanges := 256 // Partition key space
+	numRanges := ae.config.NumBuckets() // 2^MerkleDepth buckets, must match merkle tree
 	intervalPerRange := ae.config.ScanInterval / time.Duration(numRanges)
 
 	ticker := time.NewTicker(intervalPerRange)
@@ -151,13 +156,38 @@ func (ae *AntiEntropy) exchangeWithPeer(peerID common.NodeID, rangeIdx int) erro
 		return nil // In sync
 	}
 
-	// Step 2: Find differing ranges (would traverse tree in full implementation)
-	// For MVP: Simple approach - exchange all keys in range
+	fmt.Printf("Divergence detected with %s in range %d, performing key exchange\n", peerID, rangeIdx)
 
-	// Step 3: Exchange keys (simplified)
-	// In production, would use Merkle tree traversal to find exact differences
+	// Step 2: Scan keys belonging to this bucket and push them to the peer.
+	// Keys are mapped to buckets via keyToBucket. We push every key whose
+	// bucket == rangeIdx so the peer can merge and win-via-vector-clock.
+	numKeys := 0
 
-	fmt.Printf("Divergence detected with %s in range %d\n", peerID, rangeIdx)
+	err = ae.storage.Scan(nil, nil, func(key []byte, siblings *storage.SiblingSet) bool {
+		if ae.merkleTree.keyToBucket(key) != rangeIdx {
+			return true // Not in this bucket, skip
+		}
+
+		// Push the key to the peer
+		pushCtx, pushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer pushCancel()
+
+		if putErr := ae.rpc.RemotePut(pushCtx, peerID, key, siblings); putErr != nil {
+			fmt.Printf("Anti-entropy: failed to push key %x to %s: %v\n", key, peerID, putErr)
+		} else {
+			numKeys++
+		}
+
+		return true
+	})
+
+	if err != nil {
+		return fmt.Errorf("scan for anti-entropy exchange: %w", err)
+	}
+
+	if numKeys > 0 {
+		ae.metrics.KeysExchanged.Add(float64(numKeys))
+	}
 
 	return nil
 }

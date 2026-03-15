@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -171,30 +172,42 @@ func (s *Server) checkCluster() CheckResult {
 	}
 }
 
-// checkDisk checks disk health
+// checkDisk checks disk health using the storage data directory
 func (s *Server) checkDisk() CheckResult {
 	if s.storage == nil {
+		return CheckResult{Status: "healthy"}
+	}
+
+	dataDir := s.dataDir
+	if dataDir == "" {
+		dataDir = "."
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dataDir, &stat); err != nil {
 		return CheckResult{
-			Status: "healthy",
+			Status: "degraded",
+			Error:  err.Error(),
 		}
 	}
 
-	stats := s.storage.Stats()
+	totalBytes := int64(stat.Blocks) * stat.Bsize
+	freeBytes := int64(stat.Bavail) * stat.Bsize
 
-	// Get disk usage from stats
-	diskSize := stats.SizeBytes
-
-	// Assume 80% threshold for degraded
-	// In production, would read actual disk free space
 	status := "healthy"
-	if diskSize > 0 {
-		// Placeholder - would check actual free space
-		status = "healthy"
+	if totalBytes > 0 {
+		usedPct := float64(totalBytes-freeBytes) / float64(totalBytes)
+		if usedPct >= 0.95 {
+			status = "unhealthy"
+		} else if usedPct >= 0.80 {
+			status = "degraded"
+		}
 	}
 
 	return CheckResult{
 		Status:     status,
-		TotalBytes: int64(diskSize),
+		FreeBytes:  freeBytes,
+		TotalBytes: totalBytes,
 	}
 }
 

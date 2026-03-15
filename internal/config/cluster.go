@@ -26,8 +26,9 @@ type ClusterConfig struct {
 
 // MemberConfig defines a cluster member (Section 2.2)
 type MemberConfig struct {
-	ID   common.NodeID `yaml:"id"`   // Unique identifier
-	Addr string        `yaml:"addr"` // <host>:<port> format
+	ID       common.NodeID `yaml:"id"`        // Unique identifier
+	Addr     string        `yaml:"addr"`      // gRPC <host>:<port>
+	HTTPAddr string        `yaml:"http_addr"` // HTTP <host>:<port> for internal RPC
 }
 
 // DefaultClusterConfig returns default configuration

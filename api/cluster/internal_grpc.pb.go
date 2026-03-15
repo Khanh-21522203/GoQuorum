@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: internal.proto
 
-package internalv1
+package cluster
 
 import (
 	context "context"
@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GoQuorumInternal_Replicate_FullMethodName           = "/goquorum.internal.v1.GoQuorumInternal/Replicate"
-	GoQuorumInternal_Read_FullMethodName                = "/goquorum.internal.v1.GoQuorumInternal/Read"
-	GoQuorumInternal_Heartbeat_FullMethodName           = "/goquorum.internal.v1.GoQuorumInternal/Heartbeat"
-	GoQuorumInternal_AntiEntropyExchange_FullMethodName = "/goquorum.internal.v1.GoQuorumInternal/AntiEntropyExchange"
-	GoQuorumInternal_GetMerkleRoot_FullMethodName       = "/goquorum.internal.v1.GoQuorumInternal/GetMerkleRoot"
+	GoQuorumInternal_Replicate_FullMethodName           = "/goquorum.cluster.GoQuorumInternal/Replicate"
+	GoQuorumInternal_Read_FullMethodName                = "/goquorum.cluster.GoQuorumInternal/Read"
+	GoQuorumInternal_Heartbeat_FullMethodName           = "/goquorum.cluster.GoQuorumInternal/Heartbeat"
+	GoQuorumInternal_AntiEntropyExchange_FullMethodName = "/goquorum.cluster.GoQuorumInternal/AntiEntropyExchange"
+	GoQuorumInternal_GetMerkleRoot_FullMethodName       = "/goquorum.cluster.GoQuorumInternal/GetMerkleRoot"
 )
 
 // GoQuorumInternalClient is the client API for GoQuorumInternal service.
@@ -254,7 +254,7 @@ func _GoQuorumInternal_GetMerkleRoot_Handler(srv interface{}, ctx context.Contex
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var GoQuorumInternal_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "goquorum.internal.v1.GoQuorumInternal",
+	ServiceName: "goquorum.cluster.GoQuorumInternal",
 	HandlerType: (*GoQuorumInternalServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
