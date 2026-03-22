@@ -9,15 +9,16 @@ import (
 // This is a lightweight config that gets converted to storage.StorageOptions at runtime
 type StorageConfig struct {
 	// Basic settings
-	SyncWrites   bool `yaml:"sync_writes"`   // Sync writes to disk (default: true)
-	CacheSizeMB  int  `yaml:"cache_size_mb"` // Block cache size in MB (default: 256)
-	MemTableMB   int  `yaml:"memtable_mb"`   // MemTable size in MB (default: 64)
+	SyncWrites   bool `yaml:"sync_writes"`    // Sync writes to disk (default: true)
+	CacheSizeMB  int  `yaml:"cache_size_mb"`  // Block cache size in MB (default: 256)
+	MemTableMB   int  `yaml:"memtable_mb"`    // MemTable size in MB (default: 64)
 	MaxOpenFiles int  `yaml:"max_open_files"` // Max open file handles (default: 1000)
 
 	// Data limits
-	MaxKeySizeKB   int `yaml:"max_key_size_kb"`   // Max key size in KB (default: 64)
-	MaxValueSizeMB int `yaml:"max_value_size_mb"` // Max value size in MB (default: 1)
-	MaxSiblings    int `yaml:"max_siblings"`      // Max concurrent versions (default: 100)
+	MaxKeySizeKB            int `yaml:"max_key_size_kb"`           // Max key size in KB (default: 64)
+	MaxValueSizeMB          int `yaml:"max_value_size_mb"`         // Max value size in MB (default: 1)
+	MaxSiblings             int `yaml:"max_siblings"`              // Max concurrent versions (default: 100)
+	SiblingWarningThreshold int `yaml:"sibling_warning_threshold"` // Warn when siblings exceed this (default: 5)
 
 	// Tombstone GC
 	TombstoneGCEnabled  bool          `yaml:"tombstone_gc_enabled"`  // Enable tombstone GC (default: true)
@@ -37,9 +38,10 @@ func DefaultStorageConfig() StorageConfig {
 		MemTableMB:   64,
 		MaxOpenFiles: 1000,
 
-		MaxKeySizeKB:   64,
-		MaxValueSizeMB: 1,
-		MaxSiblings:    100,
+		MaxKeySizeKB:            64,
+		MaxValueSizeMB:          1,
+		MaxSiblings:             100,
+		SiblingWarningThreshold: 5,
 
 		TombstoneGCEnabled:  true,
 		TombstoneTTLDays:    7,

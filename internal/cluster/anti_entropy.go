@@ -192,6 +192,57 @@ func (ae *AntiEntropy) exchangeWithPeer(peerID common.NodeID, rangeIdx int) erro
 	return nil
 }
 
+// TriggerWithPeer immediately starts a full anti-entropy exchange with a specific
+// peer in a background goroutine.  Called when a node recovers from failure so
+// diverged data is reconciled right away instead of waiting for the next
+// scheduled scan interval (default 1 h).
+func (ae *AntiEntropy) TriggerWithPeer(nodeID common.NodeID) {
+	if !ae.config.Enabled {
+		return
+	}
+	ae.wg.Add(1)
+	go func() {
+		defer ae.wg.Done()
+		fmt.Printf("Post-recovery anti-entropy triggered with %s\n", nodeID)
+		numBuckets := ae.config.NumBuckets()
+		for i := 0; i < numBuckets; i++ {
+			select {
+			case <-ae.stopCh:
+				return
+			default:
+				if err := ae.exchangeWithPeer(nodeID, i); err != nil {
+					fmt.Printf("Post-recovery anti-entropy error with %s bucket %d: %v\n", nodeID, i, err)
+				}
+			}
+		}
+	}()
+}
+
+// SyncWithPeers performs a full synchronous anti-entropy exchange with every
+// peer in the list.  Unlike TriggerWithPeer (which is async), this blocks
+// until all buckets have been pushed to all peers.  Used during node leave so
+// data is fully drained before the node is removed from the ring.
+func (ae *AntiEntropy) SyncWithPeers(peers []common.NodeID) {
+	if !ae.config.Enabled {
+		return
+	}
+	numBuckets := ae.config.NumBuckets()
+	for _, peer := range peers {
+		fmt.Printf("[REBALANCE] Draining data to %s (%d buckets)...\n", peer, numBuckets)
+		for i := 0; i < numBuckets; i++ {
+			select {
+			case <-ae.stopCh:
+				return
+			default:
+				if err := ae.exchangeWithPeer(peer, i); err != nil {
+					fmt.Printf("[REBALANCE] Drain to %s bucket %d: %v\n", peer, i, err)
+				}
+			}
+		}
+		fmt.Printf("[REBALANCE] Drain to %s complete\n", peer)
+	}
+}
+
 // OnKeyUpdate updates Merkle tree when key changes (Section 4.3 - Incremental)
 func (ae *AntiEntropy) OnKeyUpdate(key []byte, siblings *storage.SiblingSet) {
 	if !ae.config.Enabled {

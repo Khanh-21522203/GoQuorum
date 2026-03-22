@@ -9,6 +9,10 @@ type FailureDetectorMetrics struct {
 	NodeRecovered    prometheus.Counter
 	SlowNodeDetected prometheus.Counter
 
+	// Partition detection
+	PartitionSuspected prometheus.Counter // incremented when a node goes unreachable while others are healthy
+	PartitionHealed    prometheus.Counter // incremented when a previously-failed node becomes reachable again
+
 	PeerLatency prometheus.HistogramVec // Per peer (Section 6.2)
 }
 
@@ -33,6 +37,14 @@ func NewFailureDetectorMetrics() *FailureDetectorMetrics {
 		SlowNodeDetected: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "failure_detector_slow_node_detected_total",
 			Help: "Total slow nodes detected (Section 6.2)",
+		}),
+		PartitionSuspected: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "failure_detector_partition_suspected_total",
+			Help: "Times a node became unreachable while other peers remained healthy (partition signal)",
+		}),
+		PartitionHealed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "failure_detector_partition_healed_total",
+			Help: "Times a previously-failed node became reachable again (partition healed)",
 		}),
 		PeerLatency: *prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "failure_detector_peer_latency_seconds",

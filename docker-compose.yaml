@@ -9,7 +9,7 @@ services:
       - "7071:7070"
       - "8081:8080"
     volumes:
-      - node1-data:/var/lib/goquorum
+      - ./data/node1:/var/lib/goquorum
       - ./config/cluster-node1.yaml:/etc/goquorum/config.yaml:ro
     environment:
       - GOQUORUM_NODE_ID=node1
@@ -29,7 +29,7 @@ services:
       - "7072:7070"
       - "8082:8080"
     volumes:
-      - node2-data:/var/lib/goquorum
+      - ./data/node2:/var/lib/goquorum
       - ./config/cluster-node2.yaml:/etc/goquorum/config.yaml:ro
     environment:
       - GOQUORUM_NODE_ID=node2
@@ -51,7 +51,7 @@ services:
       - "7073:7070"
       - "8083:8080"
     volumes:
-      - node3-data:/var/lib/goquorum
+      - ./data/node3:/var/lib/goquorum
       - ./config/cluster-node3.yaml:/etc/goquorum/config.yaml:ro
     environment:
       - GOQUORUM_NODE_ID=node3
@@ -72,12 +72,36 @@ services:
       - "9090:9090"
     volumes:
       - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ./data/prometheus:/prometheus
     networks:
       - goquorum-net
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: goquorum-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki.yaml:/etc/loki/local-config.yaml:ro
+      - ./data/loki:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - goquorum-net
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: goquorum-promtail
+    volumes:
+      - ./config/promtail.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yaml
+    networks:
+      - goquorum-net
+    depends_on:
+      - loki
 
   grafana:
     image: grafana/grafana:10.0.0
@@ -85,21 +109,16 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - grafana-data:/var/lib/grafana
+      - ./data/grafana:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     networks:
       - goquorum-net
     depends_on:
       - prometheus
+      - loki
 
 networks:
   goquorum-net:
     driver: bridge
-
-volumes:
-  node1-data:
-  node2-data:
-  node3-data:
-  prometheus-data:
-  grafana-data:

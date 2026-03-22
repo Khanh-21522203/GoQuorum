@@ -3,7 +3,7 @@
 
 node:
   node_id: "node1"
-  data_dir: "./data"
+  data_dir: "/var/lib/goquorum"
   log_level: "INFO"
 
 cluster:
@@ -29,6 +29,7 @@ storage:
   max_key_size_kb: 64
   max_value_size_mb: 1
   max_siblings: 100
+  sibling_warning_threshold: 5
   tombstone_gc_enabled: true
   tombstone_ttl_days: 7
   tombstone_gc_interval: "1h"

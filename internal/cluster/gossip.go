@@ -203,7 +203,7 @@ func (g *Gossip) Merge(incoming map[common.NodeID]*NodeEntry) {
 		}
 
 		existing, ok := g.state[id]
-		if !ok || entry.Version > existing.Version {
+		if !ok || entry.UpdatedAt > existing.UpdatedAt {
 			// Deep copy to avoid aliasing
 			copied := *entry
 			g.state[id] = &copied
@@ -227,6 +227,23 @@ func (g *Gossip) GetState() map[common.NodeID]*NodeEntry {
 		copy[id] = &e
 	}
 	return copy
+}
+
+// MarkPeer writes the failure-detector's assessed status for a peer into the
+// gossip state with the current wall-clock timestamp.  This ensures the
+// assessed status (e.g. FAILED) propagates to other nodes on the next gossip
+// round instead of being invisible until the peer calls SetSelf again.
+func (g *Gossip) MarkPeer(nodeID common.NodeID, status NodeStatus) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	entry, ok := g.state[nodeID]
+	if !ok {
+		entry = &NodeEntry{NodeID: string(nodeID)}
+		g.state[nodeID] = entry
+	}
+	entry.Status = status
+	entry.UpdatedAt = time.Now().Unix()
 }
 
 // SetSelf updates this node's own entry and increments the version.

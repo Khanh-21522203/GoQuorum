@@ -23,3 +23,10 @@ go.work
 
 /.idea
 /.claude
+# Runtime data directories (docker-compose bind mounts)
+/data/node1/
+/data/node2/
+/data/node3/
+/data/prometheus/
+/data/loki/
+/data/grafana/

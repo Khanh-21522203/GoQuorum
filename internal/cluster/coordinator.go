@@ -104,6 +104,50 @@ func (c *Coordinator) GetMerkleRoot() []byte {
 	return c.antiEntropy.GetMerkleRoot()
 }
 
+// TriggerAntiEntropyWith immediately starts a post-recovery anti-entropy
+// exchange with the given peer.  Called by the failure detector when a
+// previously-failed node comes back online.
+func (c *Coordinator) TriggerAntiEntropyWith(nodeID common.NodeID) {
+	c.antiEntropy.TriggerWithPeer(nodeID)
+}
+
+// JoinNode adds a new node to the ring and membership, then immediately
+// triggers anti-entropy to seed it with data it should own.
+// grpcAddr is the node's gRPC address; httpAddr is its internal HTTP address.
+func (c *Coordinator) JoinNode(node *common.Node, httpAddr string) error {
+	if err := c.ring.AddNode(node); err != nil {
+		return fmt.Errorf("add to ring: %w", err)
+	}
+	c.membership.AddPeer(node.ID, node.Addr, httpAddr)
+	// Seed the new node: push this node's data to it asynchronously.
+	c.antiEntropy.TriggerWithPeer(node.ID)
+	fmt.Printf("[REBALANCE] Node %s joined — ring updated, seeding via anti-entropy\n", node.ID)
+	return nil
+}
+
+// LeaveNode drains data to the remaining peers, then removes the node from
+// the ring and membership.  This blocks until the drain completes.
+func (c *Coordinator) LeaveNode(nodeID common.NodeID) error {
+	// Collect peers that will absorb the departing node's key ranges.
+	remaining := make([]common.NodeID, 0)
+	for _, id := range c.ring.GetAllNodes() {
+		if id != nodeID && id != c.nodeID {
+			remaining = append(remaining, id)
+		}
+	}
+	// Synchronously push all our data to remaining peers so nothing is lost.
+	if len(remaining) > 0 {
+		fmt.Printf("[REBALANCE] Node %s leaving — draining data to %v\n", nodeID, remaining)
+		c.antiEntropy.SyncWithPeers(remaining)
+	}
+	if err := c.ring.RemoveNode(nodeID); err != nil {
+		return fmt.Errorf("remove from ring: %w", err)
+	}
+	c.membership.RemovePeer(nodeID)
+	fmt.Printf("[REBALANCE] Node %s removed from ring and membership\n", nodeID)
+	return nil
+}
+
 // InFlightCount returns the number of currently executing requests.
 // Used by graceful shutdown to wait for in-flight requests to complete.
 func (c *Coordinator) InFlightCount() int64 {

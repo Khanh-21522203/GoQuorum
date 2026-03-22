@@ -3,21 +3,21 @@
 
 node:
   node_id: "node3"
-  data_dir: "./data/node3"
+  data_dir: "/var/lib/goquorum"
   log_level: "INFO"
 
 cluster:
-  listen_addr: "0.0.0.0:7072"
+  listen_addr: "0.0.0.0:7070"
   members:
     - id: "node1"
-      addr: "localhost:7070"
-      http_addr: "localhost:8080"
+      addr: "node1:7070"
+      http_addr: "node1:8080"
     - id: "node2"
-      addr: "localhost:7071"
-      http_addr: "localhost:8081"
+      addr: "node2:7070"
+      http_addr: "node2:8080"
     - id: "node3"
-      addr: "localhost:7072"
-      http_addr: "localhost:8082"
+      addr: "node3:7070"
+      http_addr: "node3:8080"
   heartbeat_interval: "1s"
   heartbeat_timeout: "2s"
   failure_threshold: 5
@@ -36,6 +36,7 @@ storage:
   max_key_size_kb: 64
   max_value_size_mb: 1
   max_siblings: 100
+  sibling_warning_threshold: 5
   tombstone_gc_enabled: true
   tombstone_ttl_days: 7
   tombstone_gc_interval: "1h"
@@ -63,5 +64,5 @@ connection:
   keepalive_interval: "30s"
 
 server:
-  grpc_addr: ":7072"
-  http_addr: ":8082"
+  grpc_addr: ":7070"
+  http_addr: ":8080"

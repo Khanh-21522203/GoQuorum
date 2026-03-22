@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"GoQuorum/internal/cluster"
 	"GoQuorum/internal/common"
@@ -35,20 +36,21 @@ func main() {
 
 	// Initialize storage
 	storageOpts := storage.StorageOptions{
-		DataDir:              cfg.Node.DataDir,
-		NodeID:               cfg.Node.NodeID,
-		SyncWrites:           cfg.Storage.SyncWrites,
-		BlockCacheSize:       cfg.Storage.BlockCacheSize(),
-		MemTableSize:         cfg.Storage.MemTableSize(),
-		MaxOpenFiles:         cfg.Storage.MaxOpenFiles,
-		MaxKeySize:           cfg.Storage.MaxKeySize(),
-		MaxValueSize:         cfg.Storage.MaxValueSize(),
-		MaxSiblings:          cfg.Storage.MaxSiblings,
-		TombstoneGCEnabled:   cfg.Storage.TombstoneGCEnabled,
-		TombstoneTTL:         cfg.Storage.TombstoneTTL(),
-		TombstoneGCInterval:  cfg.Storage.TombstoneGCInterval,
-		VClockPruneThreshold: cfg.Storage.VClockPruneThreshold(),
-		VClockMaxEntries:     cfg.Storage.VClockMaxEntries,
+		DataDir:                 cfg.Node.DataDir,
+		NodeID:                  cfg.Node.NodeID,
+		SyncWrites:              cfg.Storage.SyncWrites,
+		BlockCacheSize:          cfg.Storage.BlockCacheSize(),
+		MemTableSize:            cfg.Storage.MemTableSize(),
+		MaxOpenFiles:            cfg.Storage.MaxOpenFiles,
+		MaxKeySize:              cfg.Storage.MaxKeySize(),
+		MaxValueSize:            cfg.Storage.MaxValueSize(),
+		MaxSiblings:             cfg.Storage.MaxSiblings,
+		SiblingWarningThreshold: cfg.Storage.SiblingWarningThreshold,
+		TombstoneGCEnabled:      cfg.Storage.TombstoneGCEnabled,
+		TombstoneTTL:            cfg.Storage.TombstoneTTL(),
+		TombstoneGCInterval:     cfg.Storage.TombstoneGCInterval,
+		VClockPruneThreshold:    cfg.Storage.VClockPruneThreshold(),
+		VClockMaxEntries:        cfg.Storage.VClockMaxEntries,
 	}
 
 	store, err := storage.NewStorage(storageOpts)
@@ -108,13 +110,22 @@ func main() {
 	defer gossip.Stop()
 	fmt.Println("Gossip initialized")
 
+	// Wire partition-aware callbacks on the failure detector:
+	//   OnNodeRecovery — immediately sync data with the recovered node.
+	//   OnNodeFailed   — write the failure status into gossip state so it
+	//                    propagates to the rest of the cluster right away.
+	failureDetector.OnNodeRecovery = coordinator.TriggerAntiEntropyWith
+	failureDetector.OnNodeFailed = func(id common.NodeID) {
+		gossip.MarkPeer(id, cluster.NodeStatusFailed)
+	}
+
 	// Initialize hinted handoff
 	hintedHandoff := cluster.NewHintedHandoff(membership, rpcClient, cfg.Node.NodeID)
 	coordinator.SetHintedHandoff(hintedHandoff)
 	fmt.Println("Hinted handoff initialized")
 
 	// Initialize TTL sweeper
-	ttlSweeper := cluster.NewTTLSweeper(store, coordinator, 0)
+	ttlSweeper := cluster.NewTTLSweeper(store, coordinator, time.Minute)
 	ttlSweeper.Start()
 	defer ttlSweeper.Stop()
 	fmt.Println("TTL sweeper initialized")

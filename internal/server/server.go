@@ -18,6 +18,7 @@ import (
 	pb "GoQuorum/api"
 	internalpb "GoQuorum/api/cluster"
 	"GoQuorum/internal/cluster"
+	"GoQuorum/internal/common"
 	"GoQuorum/internal/config"
 	"GoQuorum/internal/security"
 	"GoQuorum/internal/storage"
@@ -192,6 +193,9 @@ func (s *Server) startHTTP() error {
 		mux.HandleFunc("/internal/gossip/exchange", s.internalAPI.handleGossipExchange)
 	}
 
+	// ── Ring rebalancing ─────────────────────────────────────────────────────
+	mux.HandleFunc("/admin/ring/nodes", s.handleAdminRingNodes)
+
 	// ── Backup / Restore ─────────────────────────────────────────────────────
 	mux.HandleFunc("/admin/backup", s.handleAdminBackup)
 	mux.HandleFunc("/admin/restore", s.handleAdminRestore)
@@ -355,6 +359,76 @@ func (s *Server) handleAdminRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleAdminRingNodes handles ring membership changes.
+//
+//	POST   /admin/ring/nodes        — add a node and trigger rebalance
+//	DELETE /admin/ring/nodes/{id}   — drain then remove a node
+//	GET    /admin/ring/nodes        — list current ring members
+func (s *Server) handleAdminRingNodes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		type nodeInfo struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		peers := s.membership.GetPeers()
+		result := make([]nodeInfo, 0, len(peers)+1)
+		result = append(result, nodeInfo{
+			ID:     string(s.membership.LocalNodeID()),
+			Status: s.membership.GetLocalStatus().String(),
+		})
+		for _, p := range peers {
+			result = append(result, nodeInfo{
+				ID:     string(p.ID),
+				Status: p.Status.String(),
+			})
+		}
+		writeJSON(w, result)
+
+	case http.MethodPost:
+		var req struct {
+			ID       string `json:"id"`
+			GRPCAddr string `json:"grpc_addr"`
+			HTTPAddr string `json:"http_addr"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ID == "" || req.GRPCAddr == "" || req.HTTPAddr == "" {
+			http.Error(w, "id, grpc_addr, and http_addr are required", http.StatusBadRequest)
+			return
+		}
+		node := &common.Node{
+			ID:               common.NodeID(req.ID),
+			Addr:             req.GRPCAddr,
+			State:            common.NodeStateActive,
+			VirtualNodeCount: s.ring.VNodeCount(),
+		}
+		if err := s.coordinator.JoinNode(node, req.HTTPAddr); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "message": req.ID + " joined ring"})
+
+	case http.MethodDelete:
+		// Extract node ID from path: /admin/ring/nodes/{id}
+		id := r.URL.Path[len("/admin/ring/nodes/"):]
+		if id == "" {
+			http.Error(w, "node id required in path", http.StatusBadRequest)
+			return
+		}
+		if err := s.coordinator.LeaveNode(common.NodeID(id)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "message": id + " removed from ring"})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

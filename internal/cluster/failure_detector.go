@@ -4,6 +4,7 @@ import (
 	"GoQuorum/internal/common"
 	"GoQuorum/internal/config"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -18,6 +19,12 @@ type FailureDetector struct {
 
 	rpc     RPCClient
 	metrics *FailureDetectorMetrics
+
+	// Optional callbacks — set after construction, before Start().
+	// OnNodeRecovery is called once when a node transitions FAILED → ACTIVE.
+	OnNodeRecovery func(nodeID common.NodeID)
+	// OnNodeFailed is called once when a node is first confirmed FAILED.
+	OnNodeFailed func(nodeID common.NodeID)
 
 	// Lifecycle
 	stopCh chan struct{}
@@ -101,19 +108,70 @@ func (fd *FailureDetector) sendHeartbeat(nodeID common.NodeID) {
 	ctx, cancel := context.WithTimeout(context.Background(), fd.config.HeartbeatTimeout)
 	defer cancel()
 
+	prevStatus := fd.membership.GetPeerStatus(nodeID)
+
 	start := time.Now()
 	err := fd.rpc.Heartbeat(ctx, nodeID)
 	latency := time.Since(start)
 
 	if err == nil {
-		// Success - update membership
 		fd.membership.RecordHeartbeatSuccess(nodeID, latency)
 		fd.metrics.HeartbeatSuccess.Inc()
+
+		// Partition healed: node was FAILED and is now reachable again.
+		if prevStatus == NodeStatusFailed {
+			fd.detectPartitionHealed(nodeID)
+			if fd.OnNodeRecovery != nil {
+				fd.OnNodeRecovery(nodeID)
+			}
+		}
 	} else {
-		// Failure - update membership
 		fd.membership.RecordHeartbeatFailure(nodeID)
 		fd.metrics.HeartbeatFailure.Inc()
+
+		// Partition suspected: node just crossed the failure threshold.
+		newStatus := fd.membership.GetPeerStatus(nodeID)
+		if prevStatus != NodeStatusFailed && newStatus == NodeStatusFailed {
+			fd.detectPartition(nodeID)
+			if fd.OnNodeFailed != nil {
+				fd.OnNodeFailed(nodeID)
+			}
+		}
 	}
+}
+
+// detectPartition logs and metrics a suspected partition when a node becomes
+// unreachable while at least one other peer is still healthy.
+func (fd *FailureDetector) detectPartition(failedNodeID common.NodeID) {
+	activeCount, failedCount := 0, 0
+	for _, id := range fd.membership.GetAllPeers() {
+		if id == failedNodeID {
+			continue
+		}
+		switch fd.membership.GetPeerStatus(id) {
+		case NodeStatusActive:
+			activeCount++
+		case NodeStatusFailed, NodeStatusSuspect:
+			failedCount++
+		}
+	}
+
+	if activeCount > 0 {
+		fd.metrics.PartitionSuspected.Inc()
+		fmt.Printf("[PARTITION] Suspected: %s unreachable while %d peer(s) healthy, %d failed\n",
+			failedNodeID, activeCount, failedCount+1)
+	} else {
+		// All peers unreachable — more likely a local network issue than a partition.
+		fmt.Printf("[PARTITION] All peers unreachable including %s — possible local isolation\n",
+			failedNodeID)
+	}
+}
+
+// detectPartitionHealed logs and metrics a partition heal when a previously
+// failed node becomes reachable again.
+func (fd *FailureDetector) detectPartitionHealed(nodeID common.NodeID) {
+	fd.metrics.PartitionHealed.Inc()
+	fmt.Printf("[PARTITION] Healed: %s is reachable again — triggering post-recovery sync\n", nodeID)
 }
 
 // GetHealthyNodes returns list of healthy nodes

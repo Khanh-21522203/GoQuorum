@@ -396,6 +396,32 @@ func (mm *MembershipManager) LocalNodeID() common.NodeID {
 	return mm.localMeta.NodeID
 }
 
+// AddPeer registers a new peer in the membership table.
+// Used when a node dynamically joins the cluster.
+func (mm *MembershipManager) AddPeer(nodeID common.NodeID, grpcAddr, httpAddr string) {
+	mm.mu.Lock()
+	defer mm.mu.Unlock()
+	if _, exists := mm.peers[nodeID]; exists {
+		return // already known
+	}
+	mm.peers[nodeID] = &PeerMetadata{
+		NodeID:   nodeID,
+		Addr:     grpcAddr,
+		HTTPAddr: httpAddr,
+		Status:   NodeStatusJoining,
+	}
+	fmt.Printf("Membership: added peer %s (%s)\n", nodeID, grpcAddr)
+}
+
+// RemovePeer removes a peer from the membership table.
+// Used when a node leaves the cluster.
+func (mm *MembershipManager) RemovePeer(nodeID common.NodeID) {
+	mm.mu.Lock()
+	defer mm.mu.Unlock()
+	delete(mm.peers, nodeID)
+	fmt.Printf("Membership: removed peer %s\n", nodeID)
+}
+
 // nodeStatusToPeerStatus converts NodeStatus to common.PeerStatus
 func nodeStatusToPeerStatus(status NodeStatus) common.PeerStatus {
 	switch status {
