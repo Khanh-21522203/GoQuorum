@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	"GoQuorum/internal/config"
+	"goquorum.io/internal/config"
 )
 
 // RateLimiter enforces a global token-bucket limit and an optional per-IP limit.

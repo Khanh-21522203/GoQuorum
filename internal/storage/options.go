@@ -1,8 +1,8 @@
 package storage
 
 import (
-	"GoQuorum/internal/common"
 	"errors"
+	"goquorum.io/api/common"
 	"time"
 )
 

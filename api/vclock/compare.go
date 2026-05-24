@@ -1,6 +1,6 @@
 package vclock
 
-import "GoQuorum/internal/common"
+import "goquorum.io/api/common"
 
 // Ordering represents the relationship between two vector clocks
 type Ordering int

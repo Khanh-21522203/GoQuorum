@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/storage"
 )
 
 func makeSiblingSet(value string) *storage.SiblingSet {

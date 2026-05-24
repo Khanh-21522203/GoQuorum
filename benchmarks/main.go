@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"GoQuorum/internal/vclock"
-	"GoQuorum/pkg/client"
+	"goquorum.io/api/vclock"
+	"goquorum.io/client"
 )
 
 // ── Config ────────────────────────────────────────────────────────────────────

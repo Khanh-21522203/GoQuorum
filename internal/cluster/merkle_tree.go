@@ -1,9 +1,9 @@
 package cluster
 
 import (
-	"GoQuorum/internal/storage"
 	"crypto/sha256"
 	"encoding/binary"
+	"goquorum.io/internal/storage"
 	"sync"
 )
 

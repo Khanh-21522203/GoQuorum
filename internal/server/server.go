@@ -15,13 +15,13 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 
-	pb "GoQuorum/api"
-	internalpb "GoQuorum/api/cluster"
-	"GoQuorum/internal/cluster"
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/security"
-	"GoQuorum/internal/storage"
+	pb "goquorum.io/api"
+	internalpb "goquorum.io/api/cluster"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/cluster"
+	"goquorum.io/internal/config"
+	"goquorum.io/internal/security"
+	"goquorum.io/internal/storage"
 )
 
 // Server wraps gRPC and HTTP servers

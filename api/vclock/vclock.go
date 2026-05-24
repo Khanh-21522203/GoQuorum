@@ -1,11 +1,11 @@
 package vclock
 
 import (
-	"GoQuorum/internal/common"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"goquorum.io/api/common"
 	"sort"
 	"time"
 )

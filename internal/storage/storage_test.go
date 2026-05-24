@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
 )
 
 func testStorage(t *testing.T) *Storage {

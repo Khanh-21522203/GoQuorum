@@ -1,8 +1,8 @@
 package config
 
 import (
-	"GoQuorum/internal/common"
 	"fmt"
+	"goquorum.io/api/common"
 	"os"
 	"time"
 

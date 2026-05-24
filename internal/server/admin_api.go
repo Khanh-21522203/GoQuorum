@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"time"
 
-	"GoQuorum/internal/cluster"
-	"GoQuorum/internal/storage"
+	"goquorum.io/internal/cluster"
+	"goquorum.io/internal/storage"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"

@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/storage"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/storage"
 )
 
 // mockRPCClient is a configurable RPCClient for tests.

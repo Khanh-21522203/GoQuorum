@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"GoQuorum/internal/config"
+	"goquorum.io/internal/config"
 )
 
 // LoadServerTLSConfig builds a *tls.Config suitable for use with a gRPC server.

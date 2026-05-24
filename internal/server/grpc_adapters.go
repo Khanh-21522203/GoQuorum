@@ -7,10 +7,10 @@ import (
 	"context"
 	"strings"
 
-	pb "GoQuorum/api"
-	internalpb "GoQuorum/api/cluster"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	pb "goquorum.io/api"
+	internalpb "goquorum.io/api/cluster"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/storage"
 )
 
 // ── Client API adapter ───────────────────────────────────────────────────────

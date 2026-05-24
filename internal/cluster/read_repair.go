@@ -1,11 +1,11 @@
 package cluster
 
 import (
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
 	"context"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/config"
+	"goquorum.io/internal/storage"
 	"math/rand"
 )
 

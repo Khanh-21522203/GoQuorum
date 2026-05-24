@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"GoQuorum/internal/cluster"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/cluster"
+	"goquorum.io/internal/storage"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

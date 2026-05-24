@@ -22,9 +22,9 @@ import (
 	"os"
 	"time"
 
-	pb "GoQuorum/api"
-	"GoQuorum/internal/vclock"
-	"GoQuorum/pkg/client"
+	pb "goquorum.io/api"
+	"goquorum.io/api/vclock"
+	"goquorum.io/client"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

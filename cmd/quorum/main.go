@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"GoQuorum/internal/cluster"
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/server"
-	"GoQuorum/internal/storage"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/cluster"
+	"goquorum.io/internal/config"
+	"goquorum.io/internal/server"
+	"goquorum.io/internal/storage"
 )
 
 const Version = "0.1.0-mvp"

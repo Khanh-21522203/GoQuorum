@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/config"
 )
 
 // NodeEntry represents this node's view of another peer in the gossip state.

@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/vclock"
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
 	"hash/crc32"
 )
 

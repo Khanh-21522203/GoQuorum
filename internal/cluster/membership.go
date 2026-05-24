@@ -1,9 +1,9 @@
 package cluster
 
 import (
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
 	"fmt"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/config"
 	"sync"
 	"time"
 )

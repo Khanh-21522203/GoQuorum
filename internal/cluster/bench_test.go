@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/config"
 )
 
 // newBenchCluster builds a 3-node integration cluster optimised for benchmarks

@@ -1,9 +1,9 @@
 package config
 
 import (
-	"GoQuorum/internal/common"
 	"errors"
 	"fmt"
+	"goquorum.io/api/common"
 	"net"
 	"regexp"
 	"time"

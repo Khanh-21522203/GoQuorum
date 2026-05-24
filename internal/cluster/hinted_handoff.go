@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/storage"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/storage"
 )
 
 const (

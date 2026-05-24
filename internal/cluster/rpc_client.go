@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/security"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/config"
+	"goquorum.io/internal/security"
+	"goquorum.io/internal/storage"
 )
 
 // RPCClient defines the interface for node-to-node communication

@@ -1,7 +1,7 @@
 package vclock
 
 import (
-	"GoQuorum/internal/common"
+	"goquorum.io/api/common"
 	"testing"
 	"time"
 )

@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/config"
+	"goquorum.io/internal/storage"
 )
 
 func makeVClock(node string, counter uint64) vclock.VectorClock {

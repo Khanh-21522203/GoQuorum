@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"GoQuorum/internal/cluster"
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/cluster"
+	"goquorum.io/internal/storage"
 )
 
 // InternalAPI implements the internal node-to-node service

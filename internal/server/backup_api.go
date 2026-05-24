@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"GoQuorum/internal/backup"
+	"goquorum.io/internal/backup"
 )
 
 // BackupDB creates a backup of the storage database to destDir.

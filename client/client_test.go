@@ -6,8 +6,8 @@ import (
 	"net"
 	"testing"
 
-	pb "GoQuorum/api"
-	"GoQuorum/internal/vclock"
+	pb "goquorum.io/api"
+	"goquorum.io/api/vclock"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

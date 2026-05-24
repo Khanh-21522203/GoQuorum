@@ -3,7 +3,7 @@ package cluster
 import (
 	"testing"
 
-	"GoQuorum/internal/common"
+	"goquorum.io/api/common"
 )
 
 func makeNode(id string) *common.Node {

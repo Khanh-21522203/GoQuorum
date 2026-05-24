@@ -3,8 +3,8 @@ package cluster
 import (
 	"testing"
 
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/config"
+	"goquorum.io/api/common"
+	"goquorum.io/internal/config"
 )
 
 func testMembership(t *testing.T, nodeID string, peers []string) *MembershipManager {

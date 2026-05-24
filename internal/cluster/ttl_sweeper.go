@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"GoQuorum/internal/storage"
-	"GoQuorum/internal/vclock"
+	"goquorum.io/api/vclock"
+	"goquorum.io/internal/storage"
 )
 
 const ttlSweepMaxPerRound = 1000 // rate-limit: at most 1000 deletes per sweep

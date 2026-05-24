@@ -1,9 +1,9 @@
 package storage
 
 import (
-	"GoQuorum/internal/common"
-	"GoQuorum/internal/vclock"
 	"fmt"
+	"goquorum.io/api/common"
+	"goquorum.io/api/vclock"
 	"strings"
 	"sync"
 	"time"
