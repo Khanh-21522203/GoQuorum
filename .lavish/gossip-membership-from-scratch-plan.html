@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Minimal Gossip Membership</title>
+<script>
+  (function () {
+    const saved = localStorage.getItem("goquorum-gossip-plan-theme");
+    const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.classList.toggle("dark", dark);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #faf8f1;
+    --surface: #ffffff;
+    --surface-2: #f0ece2;
+    --ink: #171716;
+    --body: #42413d;
+    --muted: #7c786f;
+    --line: #cec6b7;
+    --line-soft: #e4ddd1;
+    --clay: #c46145;
+    --clay-soft: rgba(196, 97, 69, 0.12);
+    --blue: #4e7f96;
+    --blue-soft: rgba(78, 127, 150, 0.12);
+    --olive: #778c55;
+    --olive-soft: rgba(119, 140, 85, 0.14);
+    --gold: #a7833d;
+    --gold-soft: rgba(167, 131, 61, 0.14);
+    --rust: #a84840;
+    --rust-soft: rgba(168, 72, 64, 0.12);
+    --shadow: rgba(35, 28, 17, 0.08);
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html.dark {
+    --bg: #141513;
+    --surface: #20221f;
+    --surface-2: #2b2d29;
+    --ink: #f9f5eb;
+    --body: #d7d1c4;
+    --muted: #9b968a;
+    --line: #4c4a42;
+    --line-soft: #34352f;
+    --clay: #e18a70;
+    --clay-soft: rgba(225, 138, 112, 0.16);
+    --blue: #81b0c5;
+    --blue-soft: rgba(129, 176, 197, 0.16);
+    --olive: #a7ba7a;
+    --olive-soft: rgba(167, 186, 122, 0.17);
+    --gold: #d2af67;
+    --gold-soft: rgba(210, 175, 103, 0.17);
+    --rust: #df7771;
+    --rust-soft: rgba(223, 119, 113, 0.16);
+    --shadow: rgba(0, 0, 0, 0.24);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--body);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--line-soft);
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  .brand {
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 560;
+  }
+  .crumb {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .spacer { flex: 1; }
+  button.theme {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    padding: 7px 10px;
+    text-transform: uppercase;
+  }
+  button.theme:hover { color: var(--ink); border-color: var(--muted); }
+
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 54px 24px 100px;
+  }
+  header {
+    max-width: 860px;
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+  h1 {
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: clamp(34px, 5vw, 52px);
+    font-weight: 520;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+    margin: 0 0 16px;
+  }
+  .lead {
+    color: var(--body);
+    font-size: 17px;
+    max-width: 780px;
+  }
+  code {
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 0.92em;
+  }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 26px 0 48px;
+  }
+  .summary .cell {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 8px 22px var(--shadow);
+    padding: 16px;
+  }
+  .summary .k {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    margin-bottom: 7px;
+    text-transform: uppercase;
+  }
+  .summary .v {
+    color: var(--ink);
+    font-weight: 680;
+  }
+
+  section { margin: 54px 0 0; }
+  .sec-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .num {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+  h2 {
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 25px;
+    font-weight: 520;
+    margin: 0;
+  }
+  .intro {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 18px;
+    max-width: 760px;
+  }
+
+  .decision {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-left: 4px solid var(--clay);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .decision strong { color: var(--ink); }
+
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .panel {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .panel h3 {
+    color: var(--ink);
+    font-size: 16px;
+    margin: 0 0 10px;
+  }
+  ul.clean {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  ul.clean li {
+    border-top: 1px solid var(--line-soft);
+    padding: 9px 0;
+    font-size: 13.6px;
+  }
+  ul.clean li:first-child { border-top: 0; padding-top: 0; }
+  .yes li::before,
+  .no li::before {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-right: 8px;
+    width: 18px;
+  }
+  .yes li::before { color: var(--olive); content: "IN"; }
+  .no li::before { color: var(--rust); content: "OUT"; }
+
+  .diagram {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .diagram svg {
+    display: block;
+    width: 100%;
+    min-height: 360px;
+  }
+  .diagram text {
+    fill: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .diagram .small { fill: var(--muted); font-size: 10px; }
+  .diagram .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; rx: 8; }
+  .diagram .blue { fill: var(--blue-soft); stroke: var(--blue); }
+  .diagram .clay { fill: var(--clay-soft); stroke: var(--clay); }
+  .diagram .olive { fill: var(--olive-soft); stroke: var(--olive); }
+  .diagram .gold { fill: var(--gold-soft); stroke: var(--gold); }
+  .diagram .edge { fill: none; stroke: var(--muted); stroke-width: 1.5; marker-end: url(#arrow); }
+  .diagram .dash { stroke-dasharray: 5 4; }
+
+  .compare-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .compare-card {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .compare-card h3 {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--ink);
+    font-size: 15px;
+    margin: 0;
+    padding: 12px 14px;
+  }
+  .compare-card ul {
+    list-style: none;
+    margin: 0;
+    padding: 0 14px 12px;
+  }
+  .compare-card li {
+    border-top: 1px solid var(--line-soft);
+    font-size: 13.4px;
+    padding: 9px 0;
+  }
+  .compare-card li:first-child { border-top: 0; }
+  .compare-card.before { border-left: 4px solid var(--gold); }
+  .compare-card.after { border-left: 4px solid var(--olive); }
+
+  .arch-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .arch-card {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 15px;
+  }
+  .arch-card .role {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    margin-bottom: 7px;
+    text-transform: uppercase;
+  }
+  .arch-card h3 {
+    color: var(--ink);
+    font-size: 15.5px;
+    margin: 0 0 8px;
+  }
+  .arch-card p {
+    font-size: 13.4px;
+    margin: 0;
+  }
+  .arch-card code { color: var(--clay); }
+
+  .timeline {
+    border-left: 2px solid var(--line);
+    margin-left: 10px;
+    padding-left: 24px;
+  }
+  .step {
+    position: relative;
+    padding-bottom: 28px;
+  }
+  .step:last-child { padding-bottom: 0; }
+  .step::before {
+    background: var(--surface);
+    border: 3px solid var(--clay);
+    border-radius: 999px;
+    content: "";
+    height: 13px;
+    left: -32px;
+    position: absolute;
+    top: 4px;
+    width: 13px;
+  }
+  .step h3 {
+    color: var(--ink);
+    font-size: 16px;
+    margin: 0 0 4px;
+  }
+  .step p {
+    color: var(--body);
+    font-size: 13.8px;
+    margin: 0 0 9px;
+    max-width: 760px;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .tag {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    padding: 3px 7px;
+  }
+
+  .table {
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1.35fr 1fr;
+  }
+  .row + .row { border-top: 1px solid var(--line-soft); }
+  .cell {
+    border-right: 1px solid var(--line-soft);
+    font-size: 13.3px;
+    padding: 12px 14px;
+    min-width: 0;
+  }
+  .cell:last-child { border-right: 0; }
+  .head .cell {
+    background: var(--surface-2);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .cell strong { color: var(--ink); }
+
+  .callout {
+    background: var(--surface-2);
+    border: 1.5px solid var(--line);
+    border-left: 4px solid var(--gold);
+    border-radius: 10px;
+    margin-top: 14px;
+    padding: 14px 16px;
+  }
+
+  @media (max-width: 860px) {
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .columns { grid-template-columns: 1fr; }
+    .compare-grid { grid-template-columns: 1fr; }
+    .arch-grid { grid-template-columns: 1fr; }
+    .row { grid-template-columns: 1fr; }
+    .cell { border-right: 0; border-top: 1px solid var(--line-soft); }
+    .row .cell:first-child { border-top: 0; }
+  }
+  @media (max-width: 560px) {
+    .bar { flex-wrap: wrap; }
+    .summary { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="brand">GoQuorum</div>
+  <div class="crumb">minimal gossip membership plan</div>
+  <div class="spacer"></div>
+  <button class="theme" id="themeToggle">Theme</button>
+</div>
+
+<main class="page">
+  <header>
+    <div class="eyebrow">Implementation plan for from-scratch membership gossip</div>
+    <h1>Keep heartbeat detection. Rebuild gossip as a tiny propagation layer.</h1>
+    <p class="lead">
+      The goal is not to import or recreate a full SWIM/memberlist package. The project only needs
+      deterministic propagation of membership state between known GoQuorum nodes, using the existing
+      HTTP internal route and the existing <code>MembershipManager</code>.
+    </p>
+  </header>
+
+  <div class="summary">
+    <div class="cell"><div class="k">Decision</div><div class="v">Implement in-house</div></div>
+    <div class="cell"><div class="k">Scope</div><div class="v">Push-pull state sync</div></div>
+    <div class="cell"><div class="k">Keep</div><div class="v">FailureDetector</div></div>
+    <div class="cell"><div class="k">Avoid</div><div class="v">Full SWIM clone</div></div>
+  </div>
+
+  <section>
+    <div class="sec-head"><span class="num">01</span><h2>Decision</h2></div>
+    <p class="intro">Use a small first-party gossip component because membership semantics are part of GoQuorum's domain model.</p>
+    <div class="decision">
+      <strong>Recommendation:</strong> implement only the feature set GoQuorum already needs: local state table, periodic peer fanout, push-pull exchange, deterministic merge, failure-detector hooks, and membership-manager updates. Do not adopt a generic gossip package unless the project later needs large-cluster behavior, advanced suspicion, encryption, or WAN-aware membership.
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">02</span><h2>Scope</h2></div>
+    <p class="intro">This plan is intentionally narrow. Heartbeats still detect liveness; gossip only spreads that knowledge.</p>
+    <div class="columns">
+      <div class="panel">
+        <h3>In scope</h3>
+        <ul class="clean yes">
+          <li>Known static peers from YAML config.</li>
+          <li>Node status propagation: joining, active, suspect, failed, leaving.</li>
+          <li>Versioned state entries with deterministic merge.</li>
+          <li>Fanout-based periodic exchange over <code>/internal/gossip/exchange</code>.</li>
+          <li>Failure detector callbacks into gossip.</li>
+          <li>Focused unit and integration tests for convergence.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Out of scope</h3>
+        <ul class="clean no">
+          <li>Replacing heartbeat failure detection.</li>
+          <li>Full SWIM probe/suspicion protocol.</li>
+          <li>Dynamic node discovery outside current join/leave paths.</li>
+          <li>Encrypted gossip payloads beyond existing TLS/mTLS transport.</li>
+          <li>WAN gossip, seed nodes, or cross-region tuning.</li>
+          <li>Persistent gossip log storage.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">03</span><h2>Before vs. Plan</h2></div>
+    <p class="intro">The current implementation is already small and first-party. The plan mainly clarifies responsibilities, merge ordering, and test seams rather than changing the runtime surface.</p>
+    <div class="compare-grid">
+      <div class="compare-card before">
+        <h3>Current implementation</h3>
+        <ul>
+          <li><code>Gossip</code> owns state, scheduling, peer picking, HTTP transport, and merge behavior in one type.</li>
+          <li>Merge is effectively wall-clock last-write-wins using <code>UpdatedAt</code>.</li>
+          <li>HTTP exchange is embedded directly in the gossip component, which makes merge behavior harder to test in isolation.</li>
+          <li>The public shape is simple and works with existing <code>/internal/gossip/exchange</code>.</li>
+        </ul>
+      </div>
+      <div class="compare-card after">
+        <h3>Planned implementation</h3>
+        <ul>
+          <li><code>Gossip</code> becomes the lifecycle coordinator and facade over smaller collaborators.</li>
+          <li><code>GossipState</code> owns deterministic merge: version/incarnation first, timestamp second, stable tie-break last.</li>
+          <li><code>GossipTransport</code>, <code>PeerPicker</code>, and <code>MembershipSink</code> become replaceable seams for tests.</li>
+          <li>The external wiring stays nearly the same: same config shape, same route, same failure-detector callbacks.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="diagram">
+      <svg viewBox="0 0 980 320" role="img" aria-label="Before and planned gossip implementation comparison">
+        <defs>
+          <marker id="arrow-compare" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path>
+          </marker>
+        </defs>
+        <rect class="box gold" x="52" y="72" width="250" height="154"></rect>
+        <text x="84" y="104">Before: one large Gossip type</text>
+        <text class="small" x="84" y="132">state map</text>
+        <text class="small" x="84" y="154">fanout selection</text>
+        <text class="small" x="84" y="176">HTTP exchange</text>
+        <text class="small" x="84" y="198">wall-clock LWW merge</text>
+
+        <path class="edge" style="marker-end: url(#arrow-compare)" d="M326,149 L424,149"></path>
+        <text class="small" x="348" y="132">split by responsibility</text>
+
+        <rect class="box clay" x="468" y="38" width="148" height="68"></rect>
+        <text x="514" y="68">Gossip</text>
+        <text class="small" x="498" y="88">facade/lifecycle</text>
+        <rect class="box gold" x="686" y="24" width="178" height="66"></rect>
+        <text x="734" y="54">GossipState</text>
+        <text class="small" x="716" y="74">merge rules</text>
+        <rect class="box olive" x="686" y="112" width="178" height="66"></rect>
+        <text x="736" y="142">PeerPicker</text>
+        <text class="small" x="716" y="162">fanout policy</text>
+        <rect class="box blue" x="686" y="200" width="178" height="66"></rect>
+        <text x="724" y="230">GossipTransport</text>
+        <text class="small" x="716" y="250">HTTP adapter</text>
+
+        <path class="edge" style="marker-end: url(#arrow-compare)" d="M616,72 L686,57"></path>
+        <path class="edge" style="marker-end: url(#arrow-compare)" d="M616,72 C652,92 654,122 686,145"></path>
+        <path class="edge" style="marker-end: url(#arrow-compare)" d="M616,72 C664,134 654,206 686,233"></path>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">04</span><h2>Target Flow</h2></div>
+    <p class="intro">The diagram should make object ownership clear first, then show how runtime events pass through those collaborators.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 980 430" role="img" aria-label="OOP architecture for minimal gossip membership">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path>
+          </marker>
+        </defs>
+        <rect class="box blue" x="38" y="66" width="166" height="70"></rect>
+        <text x="62" y="96">FailureDetector</text>
+        <text class="small" x="62" y="118">calls MarkPeer</text>
+
+        <rect class="box blue" x="38" y="208" width="166" height="70"></rect>
+        <text x="72" y="238">InternalAPI</text>
+        <text class="small" x="72" y="260">calls Merge/Snapshot</text>
+
+        <rect class="box clay" x="276" y="96" width="192" height="142"></rect>
+        <text x="330" y="126">Gossip</text>
+        <text class="small" x="304" y="150">aggregate root</text>
+        <text class="small" x="304" y="170">Start / Stop</text>
+        <text class="small" x="304" y="190">Round scheduling</text>
+        <text class="small" x="304" y="210">Public API facade</text>
+
+        <rect class="box gold" x="548" y="40" width="168" height="82"></rect>
+        <text x="588" y="72">GossipState</text>
+        <text class="small" x="574" y="94">merge + snapshot</text>
+        <text class="small" x="574" y="112">stale rejection</text>
+
+        <rect class="box" x="772" y="40" width="156" height="82"></rect>
+        <text x="812" y="72">NodeEntry</text>
+        <text class="small" x="792" y="94">status fact</text>
+        <text class="small" x="792" y="112">version/incarnation</text>
+
+        <rect class="box olive" x="548" y="178" width="168" height="74"></rect>
+        <text x="590" y="208">PeerPicker</text>
+        <text class="small" x="574" y="230">fanout policy</text>
+
+        <rect class="box blue" x="548" y="300" width="168" height="82"></rect>
+        <text x="574" y="332">GossipTransport</text>
+        <text class="small" x="574" y="354">exchange interface</text>
+        <text class="small" x="574" y="372">HTTP adapter</text>
+
+        <rect class="box olive" x="772" y="178" width="156" height="74"></rect>
+        <text x="804" y="208">MembershipSink</text>
+        <text class="small" x="794" y="230">publish status</text>
+
+        <rect class="box" x="772" y="300" width="156" height="82"></rect>
+        <text x="812" y="332">Peer node</text>
+        <text class="small" x="792" y="354">same Gossip</text>
+        <text class="small" x="792" y="372">remote exchange</text>
+
+        <path class="edge" d="M204,101 L276,145"></path>
+        <path class="edge" d="M204,243 L276,205"></path>
+        <path class="edge" d="M468,140 L548,82"></path>
+        <path class="edge" d="M716,82 L772,82"></path>
+        <path class="edge" d="M468,178 L548,215"></path>
+        <path class="edge" d="M468,218 C502,306 520,338 548,342"></path>
+        <path class="edge" d="M716,215 L772,215"></path>
+        <path class="edge" d="M716,342 L772,342"></path>
+        <path class="edge dash" d="M850,300 C830,266 832,252 850,252"></path>
+
+        <rect class="box" x="226" y="48" width="134" height="28"></rect>
+        <text class="small" x="241" y="66">MarkPeer / SetSelf</text>
+        <rect class="box" x="732" y="138" width="150" height="28"></rect>
+        <text class="small" x="747" y="156">UpdatePeerStatus</text>
+        <rect class="box" x="486" y="394" width="220" height="28"></rect>
+        <text class="small" x="502" y="412">POST /internal/gossip/exchange</text>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">05</span><h2>OOP Architecture</h2></div>
+    <p class="intro">Keep the design object-oriented around small collaborators. The core state logic should be testable without HTTP or goroutines.</p>
+    <div class="arch-grid">
+      <div class="arch-card">
+        <div class="role">aggregate root</div>
+        <h3><code>Gossip</code></h3>
+        <p>Owns lifecycle: start loop, stop loop, run rounds, expose public methods used by <code>main.go</code> and <code>InternalAPI</code>.</p>
+      </div>
+      <div class="arch-card">
+        <div class="role">state object</div>
+        <h3><code>GossipState</code></h3>
+        <p>Owns <code>map[NodeID]NodeEntry</code>, merge rules, self-entry protection, snapshots, and deterministic stale-entry rejection.</p>
+      </div>
+      <div class="arch-card">
+        <div class="role">value object</div>
+        <h3><code>NodeEntry</code></h3>
+        <p>Immutable-style membership fact: node ID, HTTP address, status, incarnation/version, update timestamp, and source node.</p>
+      </div>
+      <div class="arch-card">
+        <div class="role">port/interface</div>
+        <h3><code>GossipTransport</code></h3>
+        <p>Interface for push-pull exchange. HTTP JSON is one adapter; tests can use an in-memory fake.</p>
+      </div>
+      <div class="arch-card">
+        <div class="role">policy</div>
+        <h3><code>PeerPicker</code></h3>
+        <p>Pure fanout selection from known peers. It should bound fanout, skip self, and be deterministic under injected RNG in tests.</p>
+      </div>
+      <div class="arch-card">
+        <div class="role">adapter</div>
+        <h3><code>MembershipSink</code></h3>
+        <p>Thin interface over <code>MembershipManager.UpdatePeerStatus</code>. This prevents gossip tests from requiring full cluster config.</p>
+      </div>
+    </div>
+    <div class="callout">
+      Suggested shape: <code>Gossip</code> coordinates; <code>GossipState</code> decides; <code>GossipTransport</code> talks; <code>MembershipSink</code> publishes the result. That keeps domain logic out of HTTP handlers.
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">06</span><h2>Implementation Steps</h2></div>
+    <p class="intro">The order keeps behavior testable at each step and avoids replacing too much at once.</p>
+    <div class="timeline">
+      <div class="step">
+        <h3>Define the gossip contract</h3>
+        <p>Create explicit request/response DTOs and entry semantics: node ID, HTTP address, status, incarnation/version, updated timestamp, and source node. Keep JSON transport for compatibility with the existing internal route.</p>
+        <div class="tags"><span class="tag">internal/cluster/gossip.go</span><span class="tag">internal/server/internal_api.go</span></div>
+      </div>
+      <div class="step">
+        <h3>Make merge deterministic</h3>
+        <p>Prefer version/incarnation first, timestamp second, and stable node ID tie-break last. Avoid wall-clock-only last-write-wins because clock skew can resurrect stale states.</p>
+        <div class="tags"><span class="tag">Merge()</span><span class="tag">unit tests</span></div>
+      </div>
+      <div class="step">
+        <h3>Separate state mutation from transport</h3>
+        <p>Keep a small state store API: <code>SetSelf</code>, <code>MarkPeer</code>, <code>Merge</code>, <code>Snapshot</code>. Put HTTP exchange and fanout scheduling around that core, not inside it.</p>
+        <div class="tags"><span class="tag">testable core</span><span class="tag">no network in merge tests</span></div>
+      </div>
+      <div class="step">
+        <h3>Wire failure detector callbacks</h3>
+        <p>On confirmed failure, gossip <code>FAILED</code>. On recovery heartbeat, gossip <code>ACTIVE</code> and trigger anti-entropy as today. Do not let gossip itself decide liveness.</p>
+        <div class="tags"><span class="tag">OnNodeFailed</span><span class="tag">OnNodeRecovery</span></div>
+      </div>
+      <div class="step">
+        <h3>Replace the current implementation behind the same interface</h3>
+        <p>Keep constructor and server wiring stable where possible: <code>NewGossip</code>, <code>Start</code>, <code>Stop</code>, <code>GetState</code>, <code>Merge</code>. This limits blast radius in <code>cmd/quorum/main.go</code> and <code>server.go</code>.</p>
+        <div class="tags"><span class="tag">small diff</span><span class="tag">same route</span></div>
+      </div>
+      <div class="step">
+        <h3>Add convergence tests</h3>
+        <p>Test that A marks C failed, A gossips to B, B updates membership, C later recovers, and all nodes converge to active after exchange. Add stale update tests so older gossip cannot overwrite newer state.</p>
+        <div class="tags"><span class="tag">membership tests</span><span class="tag">integration test</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">07</span><h2>Design Choices to Review</h2></div>
+    <p class="intro">These are the decision points worth annotating in Lavish before implementation.</p>
+    <div class="table">
+      <div class="row head">
+        <div class="cell">Choice</div>
+        <div class="cell">Recommendation</div>
+        <div class="cell">Reason</div>
+      </div>
+      <div class="row">
+        <div class="cell"><strong>Merge ordering</strong></div>
+        <div class="cell">Use version/incarnation before timestamp.</div>
+        <div class="cell">Avoids clock-skew bugs in membership state.</div>
+      </div>
+      <div class="row">
+        <div class="cell"><strong>Transport</strong></div>
+        <div class="cell">Keep HTTP JSON under <code>/internal/gossip/exchange</code>.</div>
+        <div class="cell">Matches existing internal API and TLS path.</div>
+      </div>
+      <div class="row">
+        <div class="cell"><strong>Liveness owner</strong></div>
+        <div class="cell">FailureDetector owns liveness; Gossip owns propagation.</div>
+        <div class="cell">Keeps responsibilities simple and debuggable.</div>
+      </div>
+      <div class="row">
+        <div class="cell"><strong>Peer set</strong></div>
+        <div class="cell">Start with configured peers plus current join/leave hooks.</div>
+        <div class="cell">No need for discovery protocol yet.</div>
+      </div>
+    </div>
+    <div class="callout">
+      Main implementation risk: wall-clock-only merge. If the rewrite changes one thing materially, make the gossip entry version/incarnation semantics explicit and test stale-message rejection.
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">08</span><h2>Done Criteria</h2></div>
+    <p class="intro">The rewrite is complete when these are true.</p>
+    <div class="columns">
+      <div class="panel">
+        <h3>Behavior</h3>
+        <ul class="clean yes">
+          <li>Peers converge on active/suspect/failed/leaving state through gossip exchange.</li>
+          <li>Stale gossip entries cannot overwrite newer local state.</li>
+          <li>Failure and recovery callbacks preserve anti-entropy behavior.</li>
+          <li>Disabling gossip in config stops the spread loop and route wiring remains safe.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Verification</h3>
+        <ul class="clean yes">
+          <li>Unit tests cover merge ordering and self-entry protection.</li>
+          <li>Unit tests cover peer fanout selection bounds.</li>
+          <li>Integration test covers three-node convergence after failure/recovery.</li>
+          <li><code>go test ./internal/cluster ./internal/server</code> passes.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    const dark = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("goquorum-gossip-plan-theme", dark ? "dark" : "light");
+  });
+</script>
+</body>
+</html>
