@@ -171,6 +171,10 @@ gofmt -l .                                            -> clean (incl. the
   sequential counter) is documented as "pragmatic, not proven" in
   `infra/transport/iouring/doc.go` — worth a real proof or a redesign
   (e.g. a shared userData allocator) if this ships beyond a prototype.
+- Native io_uring HTTP gateway: explore replacing `net/http` with an
+  io_uring-driven HTTP/1.1 parser directly on the reactor loop to achieve a
+  100% single-goroutine binary (eliminating goroutine-per-connection and
+  `PostFunc` channel hops).
 
 ## Phase 3 — Reactor CPU core pinning
 

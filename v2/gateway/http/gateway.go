@@ -15,6 +15,12 @@ import (
 // TODO(v2): once contracts/wire is proto-generated, replace hand-rolled
 // JSON (de)serialization here with grpc-gateway-generated handlers
 // (v1: api/goquorum.pb.gw.go, internal/server/server.go).
+//
+// TODO(v2): Alternative/Future Optimization: Integrate an io_uring-native HTTP/1.1
+// parser directly into the reactor loop (submitting Accept/Recv/Send through
+// ioruntime.Runtime) so that client HTTP ingress runs on the exact same single
+// goroutine as storage and transport, eliminating net/http goroutines and PostFunc
+// channel handoffs entirely.
 type Gateway struct {
 	coord *coordinator.Coordinator
 }

@@ -1,6 +1,9 @@
 package reactor
 
-import "time"
+import (
+	"container/heap"
+	"time"
+)
 
 // TimerID identifies a scheduled timer for cancellation.
 type TimerID uint64
@@ -41,4 +44,34 @@ func (h *timerHeap) Pop() any {
 	t.index = -1
 	*h = old[:n-1]
 	return t
+}
+
+// push adds a timer to the min-heap.
+func (h *timerHeap) push(t *timer) {
+	heap.Push(h, t)
+}
+
+// pop removes and returns the earliest timer from the min-heap.
+func (h *timerHeap) pop() *timer {
+	return heap.Pop(h).(*timer)
+}
+
+// peek returns the earliest timer without removing it, or nil if empty.
+func (h *timerHeap) peek() *timer {
+	if len(*h) == 0 {
+		return nil
+	}
+	return (*h)[0]
+}
+
+// remove removes timer t from the min-heap if it is currently enqueued.
+func (h *timerHeap) remove(t *timer) {
+	if t.index >= 0 {
+		heap.Remove(h, t.index)
+	}
+}
+
+// len returns the number of active timers in the min-heap.
+func (h *timerHeap) len() int {
+	return len(*h)
 }

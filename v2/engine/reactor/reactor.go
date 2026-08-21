@@ -1,7 +1,6 @@
 package reactor
 
 import (
-	"container/heap"
 	"time"
 )
 
@@ -67,7 +66,7 @@ func (r *Reactor) schedule(after, interval time.Duration, fn func()) TimerID {
 	r.nextTimerID++
 	id := r.nextTimerID
 	t := &timer{id: id, fireAt: time.Now().Add(after), interval: interval, fn: fn}
-	heap.Push(&r.timers, t)
+	r.timers.push(t)
 	r.byID[id] = t
 	return id
 }
@@ -83,7 +82,7 @@ func (r *Reactor) CancelTimer(id TimerID) {
 	}
 	t.canceled = true
 	if t.index >= 0 {
-		heap.Remove(&r.timers, t.index)
+		r.timers.remove(t)
 		delete(r.byID, id)
 	}
 	// Else: t is currently executing (popped, index == -1); fireDueTimers
@@ -154,8 +153,8 @@ func (r *Reactor) drainTasks() {
 
 func (r *Reactor) fireDueTimers() {
 	now := time.Now()
-	for r.timers.Len() > 0 && !r.timers[0].fireAt.After(now) {
-		t := heap.Pop(&r.timers).(*timer)
+	for r.timers.len() > 0 && !r.timers.peek().fireAt.After(now) {
+		t := r.timers.pop()
 		t.fn()
 		if t.canceled {
 			delete(r.byID, t.id)
@@ -163,7 +162,7 @@ func (r *Reactor) fireDueTimers() {
 		}
 		if t.interval > 0 {
 			t.fireAt = time.Now().Add(t.interval)
-			heap.Push(&r.timers, t)
+			r.timers.push(t)
 			continue
 		}
 		delete(r.byID, t.id)
@@ -172,11 +171,8 @@ func (r *Reactor) fireDueTimers() {
 
 func (r *Reactor) nextDeadline() time.Time {
 	cap := time.Now().Add(idleCap)
-	if r.timers.Len() == 0 {
-		return cap
-	}
-	if next := r.timers[0].fireAt; next.Before(cap) {
-		return next
+	if earliest := r.timers.peek(); earliest != nil && earliest.fireAt.Before(cap) {
+		return earliest.fireAt
 	}
 	return cap
 }
