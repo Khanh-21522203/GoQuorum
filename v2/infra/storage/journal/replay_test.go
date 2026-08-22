@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"goquorum.io/v2/engine/storage"
 )
 
 func TestReplay_EmptyFile(t *testing.T) {
@@ -35,7 +33,7 @@ func TestReplay_RebuildsIndexFromValidRecords(t *testing.T) {
 	var entries []written
 	var offset int64
 	for _, key := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
-		data, err := EncodeRecord(key, sampleSiblingSet())
+		data, err := EncodeRecord(key, []byte("val-"+string(key)))
 		if err != nil {
 			t.Fatalf("EncodeRecord: %v", err)
 		}
@@ -74,7 +72,7 @@ func TestReplay_LastWritePerKeyWins(t *testing.T) {
 	f := mustOpenTempFile(t)
 	defer f.Close()
 
-	firstData, err := EncodeRecord([]byte("k"), sampleSiblingSet())
+	firstData, err := EncodeRecord([]byte("k"), []byte("first-val"))
 	if err != nil {
 		t.Fatalf("EncodeRecord: %v", err)
 	}
@@ -82,8 +80,7 @@ func TestReplay_LastWritePerKeyWins(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	tombstoneSet := &storage.SiblingSet{Siblings: []storage.Sibling{{Tombstone: true, Timestamp: 300}}}
-	secondData, err := EncodeRecord([]byte("k"), tombstoneSet)
+	secondData, err := EncodeRecord([]byte("k"), []byte("second-val"))
 	if err != nil {
 		t.Fatalf("EncodeRecord: %v", err)
 	}
@@ -108,9 +105,6 @@ func TestReplay_LastWritePerKeyWins(t *testing.T) {
 	if got.Offset != int64(len(firstData)) {
 		t.Fatalf("expected the index to point at the second (last) write, got offset %d, want %d", got.Offset, len(firstData))
 	}
-	if !got.Tombstone {
-		t.Fatal("expected the last write's tombstone flag to win")
-	}
 }
 
 func TestReplay_TruncatedTailRecoveredUpToLastValidRecord(t *testing.T) {
@@ -121,11 +115,11 @@ func TestReplay_TruncatedTailRecoveredUpToLastValidRecord(t *testing.T) {
 		t.Fatalf("OpenFile: %v", err)
 	}
 
-	dataA, err := EncodeRecord([]byte("a"), sampleSiblingSet())
+	dataA, err := EncodeRecord([]byte("a"), []byte("val-a"))
 	if err != nil {
 		t.Fatalf("EncodeRecord: %v", err)
 	}
-	dataB, err := EncodeRecord([]byte("b"), sampleSiblingSet())
+	dataB, err := EncodeRecord([]byte("b"), []byte("val-b"))
 	if err != nil {
 		t.Fatalf("EncodeRecord: %v", err)
 	}
@@ -137,8 +131,7 @@ func TestReplay_TruncatedTailRecoveredUpToLastValidRecord(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// Simulate a crash mid-write: only half of the second record actually
-	// made it to disk.
+	// Simulate a crash mid-write: only half of the second record actually made it to disk.
 	if err := f.Truncate(validTail + int64(len(dataB)/2)); err != nil {
 		t.Fatalf("Truncate: %v", err)
 	}

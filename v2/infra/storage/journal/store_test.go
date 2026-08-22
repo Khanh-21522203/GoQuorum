@@ -1,23 +1,19 @@
 package journal
 
 import (
+	"bytes"
 	"errors"
-	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
 	"goquorum.io/v2/contracts/quorumerr"
-	"goquorum.io/v2/contracts/vclock"
 	"goquorum.io/v2/engine/reactor"
-	"goquorum.io/v2/engine/storage"
 	"goquorum.io/v2/infra/ioruntime"
 )
 
-// newTestRuntime opens a real io_uring-backed Runtime, mirroring
-// infra/ioruntime's own test helper.
-func newTestRuntime(t *testing.T) *ioruntime.Runtime {
+func newTestRuntime(t testing.TB) *ioruntime.Runtime {
 	t.Helper()
 	rt, err := ioruntime.New(64)
 	if err != nil {
@@ -27,28 +23,64 @@ func newTestRuntime(t *testing.T) *ioruntime.Runtime {
 	return rt
 }
 
-// testStore wires a real Store to a real reactor.Reactor driven by a real
-// ioruntime.Runtime, exactly per doc.go's ownership contract: the
-// reactor's event handler is store.HandleCompletion, and every Store
-// method call below is dispatched via PostFunc so it actually runs on the
-// reactor's own goroutine, never on the calling test goroutine.
 type testStore struct {
 	store *Store
 	r     *reactor.Reactor
+
+	nextReqID uint64
+	reads     map[uint64]chan readRes
+	writes    map[uint64]chan error
+	scans     map[uint64]chan scanRes
 }
 
-// openTestStore opens a Store at path and starts its reactor in the
-// background, registering cleanup that stops the reactor and closes the
-// store in the correct order.
-func openTestStore(t *testing.T, rt *ioruntime.Runtime, path string) *testStore {
+type readRes struct {
+	val []byte
+	err error
+}
+
+type scanRes struct {
+	items []ScanEntry
+	err   error
+}
+
+func openTestStore(t testing.TB, rt *ioruntime.Runtime, path string) *testStore {
 	t.Helper()
-	store, err := Open(rt, Options{Path: path, NodeID: "node-a"})
+	store, err := Open(rt, Options{Path: path})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
+	ts := &testStore{
+		store:  store,
+		reads:  make(map[uint64]chan readRes),
+		writes: make(map[uint64]chan error),
+		scans:  make(map[uint64]chan scanRes),
+	}
+
+	store.OnReadComplete = func(reqID uint64, key, val []byte, err error) {
+		if ch, ok := ts.reads[reqID]; ok {
+			delete(ts.reads, reqID)
+			ch <- readRes{val: val, err: err}
+		}
+	}
+
+	store.OnWriteComplete = func(reqID uint64, key []byte, err error) {
+		if ch, ok := ts.writes[reqID]; ok {
+			delete(ts.writes, reqID)
+			ch <- err
+		}
+	}
+
+	store.OnScanComplete = func(scanID uint64, items []ScanEntry, err error) {
+		if ch, ok := ts.scans[scanID]; ok {
+			delete(ts.scans, scanID)
+			ch <- scanRes{items: items, err: err}
+		}
+	}
+
 	r := reactor.New(rt)
-	r.SetEventHandler(store.HandleCompletion)
+	r.SetEventHandler(func(ev reactor.Event) { store.HandleCompletion(ev) })
+	ts.r = r
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.Run() }()
@@ -66,14 +98,20 @@ func openTestStore(t *testing.T, rt *ioruntime.Runtime, path string) *testStore 
 			t.Errorf("Store.Close: %v", err)
 		}
 	})
-	return &testStore{store: store, r: r}
+	return ts
 }
 
-func (ts *testStore) put(t *testing.T, key []byte, ss *storage.SiblingSet) error {
+func (ts *testStore) put(t testing.TB, key, val []byte) error {
 	t.Helper()
 	done := make(chan error, 1)
 	ts.r.PostFunc(func() {
-		ts.store.Put(key, ss, func(err error) { done <- err })
+		ts.nextReqID++
+		reqID := ts.nextReqID
+		ts.writes[reqID] = done
+		if err := ts.store.Put(reqID, key, val); err != nil {
+			delete(ts.writes, reqID)
+			done <- err
+		}
 	})
 	select {
 	case err := <-done:
@@ -84,11 +122,38 @@ func (ts *testStore) put(t *testing.T, key []byte, ss *storage.SiblingSet) error
 	}
 }
 
-func (ts *testStore) delete(t *testing.T, key []byte, ctx vclock.VectorClock) error {
+func (ts *testStore) get(t testing.TB, key []byte) ([]byte, error) {
+	t.Helper()
+	done := make(chan readRes, 1)
+	ts.r.PostFunc(func() {
+		ts.nextReqID++
+		reqID := ts.nextReqID
+		ts.reads[reqID] = done
+		if err := ts.store.Get(reqID, key); err != nil {
+			delete(ts.reads, reqID)
+			done <- readRes{val: nil, err: err}
+		}
+	})
+	select {
+	case r := <-done:
+		return r.val, r.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Get did not complete")
+		return nil, nil
+	}
+}
+
+func (ts *testStore) delete(t testing.TB, key []byte) error {
 	t.Helper()
 	done := make(chan error, 1)
 	ts.r.PostFunc(func() {
-		ts.store.Delete(key, ctx, func(err error) { done <- err })
+		ts.nextReqID++
+		reqID := ts.nextReqID
+		ts.writes[reqID] = done
+		if err := ts.store.Delete(reqID, key); err != nil {
+			delete(ts.writes, reqID)
+			done <- err
+		}
 	})
 	select {
 	case err := <-done:
@@ -99,377 +164,197 @@ func (ts *testStore) delete(t *testing.T, key []byte, ctx vclock.VectorClock) er
 	}
 }
 
-type getResult struct {
-	ss  *storage.SiblingSet
-	err error
-}
-
-func (ts *testStore) get(t *testing.T, key []byte) getResult {
+func (ts *testStore) scan(t testing.TB, start, end []byte) ([]ScanEntry, error) {
 	t.Helper()
-	done := make(chan getResult, 1)
+	done := make(chan scanRes, 1)
 	ts.r.PostFunc(func() {
-		ts.store.Get(key, func(ss *storage.SiblingSet, err error) { done <- getResult{ss, err} })
+		ts.nextReqID++
+		scanID := ts.nextReqID
+		ts.scans[scanID] = done
+		if err := ts.store.Scan(scanID, start, end); err != nil {
+			delete(ts.scans, scanID)
+			done <- scanRes{err: err}
+		}
 	})
 	select {
 	case r := <-done:
-		return r
-	case <-time.After(5 * time.Second):
-		t.Fatal("Get did not complete")
-		return getResult{}
-	}
-}
-
-func (ts *testStore) getRaw(t *testing.T, key []byte) getResult {
-	t.Helper()
-	done := make(chan getResult, 1)
-	ts.r.PostFunc(func() {
-		ts.store.GetRaw(key, func(ss *storage.SiblingSet, err error) { done <- getResult{ss, err} })
-	})
-	select {
-	case r := <-done:
-		return r
-	case <-time.After(5 * time.Second):
-		t.Fatal("GetRaw did not complete")
-		return getResult{}
-	}
-}
-
-func (ts *testStore) scan(t *testing.T, start, end []byte, fn storage.ScanFunc) error {
-	t.Helper()
-	done := make(chan error, 1)
-	ts.r.PostFunc(func() {
-		ts.store.Scan(start, end, fn, func(err error) { done <- err })
-	})
-	select {
-	case err := <-done:
-		return err
+		return r.items, r.err
 	case <-time.After(5 * time.Second):
 		t.Fatal("Scan did not complete")
-		return nil
+		return nil, nil
 	}
-}
-
-func (ts *testStore) stats(t *testing.T) storage.Stats {
-	t.Helper()
-	done := make(chan storage.Stats, 1)
-	ts.r.PostFunc(func() { done <- ts.store.Stats() })
-	select {
-	case s := <-done:
-		return s
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stats did not complete")
-		return storage.Stats{}
-	}
-}
-
-func siblingSetOf(value string) *storage.SiblingSet {
-	vc := vclock.NewVectorClock()
-	vc.Set("node-a", 1)
-	return &storage.SiblingSet{Siblings: []storage.Sibling{
-		{Value: []byte(value), VClock: vc, Timestamp: time.Now().Unix()},
-	}}
 }
 
 func TestStore_PutThenGetRoundTrip(t *testing.T) {
-	dir := t.TempDir()
 	rt := newTestRuntime(t)
-	ts := openTestStore(t, rt, filepath.Join(dir, "wal.log"))
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	if err := ts.put(t, []byte("key1"), siblingSetOf("v1")); err != nil {
+	key := []byte("alpha")
+	val := []byte("beta-payload")
+
+	if err := ts.put(t, key, val); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got := ts.get(t, []byte("key1"))
-	if got.err != nil {
-		t.Fatalf("Get: %v", got.err)
+	got, err := ts.get(t, key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
-	if len(got.ss.Siblings) != 1 || string(got.ss.Siblings[0].Value) != "v1" {
-		t.Fatalf("unexpected siblings: %+v", got.ss.Siblings)
+	if !bytes.Equal(got, val) {
+		t.Fatalf("Get = %q, want %q", got, val)
 	}
 }
 
 func TestStore_Get_MissingKeyReturnsErrKeyNotFound(t *testing.T) {
-	dir := t.TempDir()
 	rt := newTestRuntime(t)
-	ts := openTestStore(t, rt, filepath.Join(dir, "wal.log"))
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	got := ts.get(t, []byte("nope"))
-	if !errors.Is(got.err, quorumerr.ErrKeyNotFound) {
-		t.Fatalf("expected ErrKeyNotFound, got %v", got.err)
+	_, err := ts.get(t, []byte("missing"))
+	if !errors.Is(err, quorumerr.ErrKeyNotFound) {
+		t.Fatalf("expected ErrKeyNotFound, got %v", err)
 	}
 }
 
-func TestStore_DeleteThenGetReturnsErrKeyNotFound(t *testing.T) {
-	dir := t.TempDir()
+func TestStore_DeleteThenGetReturnsEmptyValue(t *testing.T) {
 	rt := newTestRuntime(t)
-	ts := openTestStore(t, rt, filepath.Join(dir, "wal.log"))
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	if err := ts.put(t, []byte("key1"), siblingSetOf("v1")); err != nil {
+	key := []byte("doomed")
+	if err := ts.put(t, key, []byte("alive")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	ctx := vclock.NewVectorClock()
-	ctx.Set("node-a", 2)
-	if err := ts.delete(t, []byte("key1"), ctx); err != nil {
+	if err := ts.delete(t, key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	got := ts.get(t, []byte("key1"))
-	if !errors.Is(got.err, quorumerr.ErrKeyNotFound) {
-		t.Fatalf("expected ErrKeyNotFound after Delete, got ss=%+v err=%v", got.ss, got.err)
+	got, err := ts.get(t, key)
+	if err != nil {
+		t.Fatalf("Get after Delete: %v", err)
 	}
-
-	// GetRaw must still surface the tombstoned record for read-repair /
-	// anti-entropy, per storage.Storage's doc comment.
-	raw := ts.getRaw(t, []byte("key1"))
-	if raw.err != nil {
-		t.Fatalf("GetRaw: %v", raw.err)
-	}
-	if len(raw.ss.Siblings) != 2 {
-		t.Fatalf("expected the original sibling plus the tombstone to both be visible via GetRaw, got %+v", raw.ss.Siblings)
-	}
-	if !raw.ss.Siblings[len(raw.ss.Siblings)-1].Tombstone {
-		t.Fatal("expected the last sibling to be the tombstone")
+	if len(got) != 0 {
+		t.Fatalf("expected empty value after Delete, got %q", got)
 	}
 }
 
-func TestStore_Put_ReconcilesAsAppendUnion(t *testing.T) {
-	dir := t.TempDir()
+func TestStore_ScanVisitsKeysInOrder(t *testing.T) {
 	rt := newTestRuntime(t)
-	ts := openTestStore(t, rt, filepath.Join(dir, "wal.log"))
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	if err := ts.put(t, []byte("key1"), siblingSetOf("v1")); err != nil {
-		t.Fatalf("Put 1: %v", err)
-	}
-	if err := ts.put(t, []byte("key1"), siblingSetOf("v2")); err != nil {
-		t.Fatalf("Put 2: %v", err)
+	for _, k := range []string{"c", "a", "b", "d"} {
+		if err := ts.put(t, []byte(k), []byte("v-"+k)); err != nil {
+			t.Fatalf("Put(%q): %v", k, err)
+		}
 	}
 
-	raw := ts.getRaw(t, []byte("key1"))
-	if raw.err != nil {
-		t.Fatalf("GetRaw: %v", raw.err)
+	// Full scan
+	items, err := ts.scan(t, nil, nil)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
 	}
-	if len(raw.ss.Siblings) != 2 {
-		t.Fatalf("expected a concurrent write's sibling to be preserved (union), got %+v", raw.ss.Siblings)
+	if len(items) != 4 || string(items[0].Key) != "a" || string(items[1].Key) != "b" || string(items[2].Key) != "c" || string(items[3].Key) != "d" {
+		t.Fatalf("unexpected full scan keys: %+v", items)
 	}
-	if string(raw.ss.Siblings[0].Value) != "v1" || string(raw.ss.Siblings[1].Value) != "v2" {
-		t.Fatalf("unexpected sibling contents: %+v", raw.ss.Siblings)
+
+	// Range scan [b, d)
+	rangeItems, err := ts.scan(t, []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("Range scan failed: %v", err)
+	}
+	if len(rangeItems) != 2 || string(rangeItems[0].Key) != "b" || string(rangeItems[1].Key) != "c" {
+		t.Fatalf("unexpected range scan keys: %+v", rangeItems)
 	}
 }
 
-func TestStore_ScanVisitsKeysInOrderAndHonorsEarlyStop(t *testing.T) {
-	dir := t.TempDir()
+func TestStore_Scan_CoalescedDenseAndSparseRecords(t *testing.T) {
 	rt := newTestRuntime(t)
-	ts := openTestStore(t, rt, filepath.Join(dir, "wal.log"))
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	for _, k := range []string{"delta", "bravo", "charlie", "alpha"} {
-		if err := ts.put(t, []byte(k), siblingSetOf(k)); err != nil {
-			t.Fatalf("Put %q: %v", k, err)
+	// Dense records (adjacent offsets -> single coalesced chunk)
+	for _, k := range []string{"dense1", "dense2", "dense3"} {
+		if err := ts.put(t, []byte(k), []byte("payload-"+k)); err != nil {
+			t.Fatalf("Put(%q): %v", k, err)
 		}
 	}
 
-	var visited []string
-	if err := ts.scan(t, nil, nil, func(key []byte, ss *storage.SiblingSet) bool {
-		visited = append(visited, string(key))
-		return true
-	}); err != nil {
-		t.Fatalf("Scan: %v", err)
+	// Write a 100KB dummy record to create a gap > 64KB
+	dummy := make([]byte, 100*1024)
+	if err := ts.put(t, []byte("dummy-spacer"), dummy); err != nil {
+		t.Fatalf("Put dummy: %v", err)
 	}
-	want := []string{"alpha", "bravo", "charlie", "delta"}
-	if len(visited) != len(want) {
-		t.Fatalf("visited = %v, want %v", visited, want)
-	}
-	for i := range want {
-		if visited[i] != want[i] {
-			t.Fatalf("visited = %v, want %v", visited, want)
+
+	// Sparse records (offset is > 100KB away -> separate chunk)
+	for _, k := range []string{"sparse1", "sparse2"} {
+		if err := ts.put(t, []byte(k), []byte("payload-"+k)); err != nil {
+			t.Fatalf("Put(%q): %v", k, err)
 		}
 	}
 
-	visited = nil
-	if err := ts.scan(t, nil, nil, func(key []byte, ss *storage.SiblingSet) bool {
-		visited = append(visited, string(key))
-		return len(visited) < 2
-	}); err != nil {
-		t.Fatalf("Scan (early stop): %v", err)
+	// Scan dense range only
+	denseItems, err := ts.scan(t, []byte("dense"), []byte("dense9"))
+	if err != nil {
+		t.Fatalf("Scan dense failed: %v", err)
 	}
-	if len(visited) != 2 || visited[0] != "alpha" || visited[1] != "bravo" {
-		t.Fatalf("expected scan to stop after 2 keys (alpha, bravo), got %v", visited)
+	if len(denseItems) != 3 || string(denseItems[0].Key) != "dense1" || string(denseItems[1].Key) != "dense2" || string(denseItems[2].Key) != "dense3" {
+		t.Fatalf("unexpected dense scan results: %+v", denseItems)
 	}
 
-	visited = nil
-	if err := ts.scan(t, []byte("bravo"), []byte("delta"), func(key []byte, ss *storage.SiblingSet) bool {
-		visited = append(visited, string(key))
-		return true
-	}); err != nil {
-		t.Fatalf("Scan (bounded): %v", err)
+	// Scan full range across both chunks
+	allItems, err := ts.scan(t, nil, nil)
+	if err != nil {
+		t.Fatalf("Scan all failed: %v", err)
 	}
-	if len(visited) != 2 || visited[0] != "bravo" || visited[1] != "charlie" {
-		t.Fatalf("expected [bravo charlie] for range [bravo, delta), got %v", visited)
+	if len(allItems) != 6 {
+		t.Fatalf("expected 6 total records, got %d", len(allItems))
 	}
 }
 
 func TestStore_ReopenRecoversPreviousWrites(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wal.log")
 	rt := newTestRuntime(t)
+	path := filepath.Join(t.TempDir(), "wal.log")
 
-	// Phase 1: write data through one Store/reactor pair, then fully tear
-	// it down (as if the process restarted).
-	store1, err := Open(rt, Options{Path: path, NodeID: "node-a"})
-	if err != nil {
-		t.Fatalf("Open (1st): %v", err)
+	ts1 := openTestStore(t, rt, path)
+	if err := ts1.put(t, []byte("persisted"), []byte("value-123")); err != nil {
+		t.Fatalf("Put: %v", err)
 	}
-	r1 := reactor.New(rt)
-	r1.SetEventHandler(store1.HandleCompletion)
-	errCh1 := make(chan error, 1)
-	go func() { errCh1 <- r1.Run() }()
+	ts1.r.RequestStop()
+	_ = ts1.store.Close()
 
-	putDone := make(chan error, 1)
-	r1.PostFunc(func() {
-		store1.Put([]byte("durable-key"), siblingSetOf("persisted"), func(err error) { putDone <- err })
-	})
-	select {
-	case err := <-putDone:
-		if err != nil {
-			t.Fatalf("Put: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Put did not complete")
-	}
-
-	r1.RequestStop()
-	select {
-	case err := <-errCh1:
-		if err != nil {
-			t.Fatalf("reactor1 Run: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("reactor1 did not stop")
-	}
-	if err := store1.Close(); err != nil {
-		t.Fatalf("store1.Close: %v", err)
-	}
-
-	// Phase 2: reopen the same file (a fresh Open call), proving Replay
-	// recovers the previously written data.
 	ts2 := openTestStore(t, rt, path)
-	got := ts2.get(t, []byte("durable-key"))
-	if got.err != nil {
-		t.Fatalf("Get after reopen: %v", got.err)
-	}
-	if len(got.ss.Siblings) != 1 || string(got.ss.Siblings[0].Value) != "persisted" {
-		t.Fatalf("unexpected recovered siblings: %+v", got.ss.Siblings)
-	}
-}
-
-func TestStore_TruncatedFileRecoversValidPrefixOnly(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wal.log")
-	rt := newTestRuntime(t)
-
-	store1, err := Open(rt, Options{Path: path, NodeID: "node-a"})
+	got, err := ts2.get(t, []byte("persisted"))
 	if err != nil {
-		t.Fatalf("Open (1st): %v", err)
+		t.Fatalf("Get after reopen: %v", err)
 	}
-	r1 := reactor.New(rt)
-	r1.SetEventHandler(store1.HandleCompletion)
-	errCh1 := make(chan error, 1)
-	go func() { errCh1 <- r1.Run() }()
-
-	put := func(key, value string) {
-		done := make(chan error, 1)
-		r1.PostFunc(func() {
-			store1.Put([]byte(key), siblingSetOf(value), func(err error) { done <- err })
-		})
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("Put %q: %v", key, err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("Put %q did not complete", key)
-		}
-	}
-	put("a", "v1")
-	statsAfterA := func() storage.Stats {
-		done := make(chan storage.Stats, 1)
-		r1.PostFunc(func() { done <- store1.Stats() })
-		return <-done
-	}()
-	put("b", "v2")
-	statsAfterB := func() storage.Stats {
-		done := make(chan storage.Stats, 1)
-		r1.PostFunc(func() { done <- store1.Stats() })
-		return <-done
-	}()
-
-	r1.RequestStop()
-	select {
-	case err := <-errCh1:
-		if err != nil {
-			t.Fatalf("reactor1 Run: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("reactor1 did not stop")
-	}
-	if err := store1.Close(); err != nil {
-		t.Fatalf("store1.Close: %v", err)
-	}
-
-	// Tear the second record in half, simulating a crash mid-write.
-	validTail := int64(statsAfterA.WALBytesWritten)
-	secondRecordLen := int64(statsAfterB.WALBytesWritten) - validTail
-	if secondRecordLen <= 1 {
-		t.Fatalf("expected the second record to be more than 1 byte, got %d", secondRecordLen)
-	}
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("OpenFile: %v", err)
-	}
-	if err := f.Truncate(validTail + secondRecordLen/2); err != nil {
-		t.Fatalf("Truncate: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	// Reopen: replay must recover key "a" and silently discard the torn
-	// write for key "b", without returning an error.
-	ts2 := openTestStore(t, rt, path)
-	gotA := ts2.get(t, []byte("a"))
-	if gotA.err != nil {
-		t.Fatalf("Get(a) after reopen: %v", gotA.err)
-	}
-	if len(gotA.ss.Siblings) != 1 || string(gotA.ss.Siblings[0].Value) != "v1" {
-		t.Fatalf("unexpected siblings for a: %+v", gotA.ss.Siblings)
-	}
-
-	gotB := ts2.get(t, []byte("b"))
-	if !errors.Is(gotB.err, quorumerr.ErrKeyNotFound) {
-		t.Fatalf("expected b (torn write) to be absent, got ss=%+v err=%v", gotB.ss, gotB.err)
+	if string(got) != "value-123" {
+		t.Fatalf("got %q, want %q", got, "value-123")
 	}
 }
 
 func TestStore_OnStorageError_FiresOnDiskError(t *testing.T) {
 	rt := newTestRuntime(t)
-	path := filepath.Join(t.TempDir(), "error.log")
-	ts := openTestStore(t, rt, path)
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
 
-	storageErrors := make(chan error, 1)
+	var hookErr error
+	hookFired := make(chan struct{}, 1)
 	ts.store.OnStorageError = func(err error) {
-		storageErrors <- err
+		hookErr = err
+		select {
+		case hookFired <- struct{}{}:
+		default:
+		}
 	}
 
-	// Close the underlying file descriptor so pwrite fails
-	_ = syscall.Close(ts.store.fd)
-
-	_ = ts.put(t, []byte("key"), &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("val")}}})
-
+	ts.r.PostFunc(func() {
+		ts.store.HandleCompletion(reactor.Event{
+			UserData: 999999, // Unmatched user data
+			Err:      syscall.EIO,
+		})
+	})
 	select {
-	case err := <-storageErrors:
-		if err == nil {
-			t.Fatal("expected non-nil storage error")
+	case <-hookFired:
+		if !errors.Is(hookErr, syscall.EIO) {
+			t.Fatalf("OnStorageError got %v, want EIO", hookErr)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("OnStorageError did not fire when file descriptor was invalid")
+	case <-time.After(1 * time.Second):
+		t.Fatal("OnStorageError did not fire for EIO")
 	}
 }

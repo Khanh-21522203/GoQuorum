@@ -113,14 +113,14 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	r := reactor.New(rt)
 
-	// 2. Storage port (infra/storage/journal implements engine/storage.Storage).
-	store, err := journal.Open(rt, journal.Options{
-		Path:   filepath.Join(cfg.Node.DataDir, walFileName),
-		NodeID: cfg.Node.NodeID,
+	// 2. Storage port (infra/storage/journal raw WAL adapted to engine/storage.Storage).
+	rawStore, err := journal.Open(rt, journal.Options{
+		Path: filepath.Join(cfg.Node.DataDir, walFileName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
+	store := enginestorage.NewAdapter(rawStore, cfg.Node.NodeID)
 
 	// 3. Membership view.
 	mm := membership.NewMembershipManager(membershipConfig(cfg.Cluster), version)
@@ -181,7 +181,7 @@ func New(cfg *config.Config) (*Server, error) {
 		if ts.HandleCompletion(ev) {
 			return
 		}
-		store.HandleCompletion(ev)
+		rawStore.HandleCompletion(ev)
 	})
 
 	// 6. Coordinator, composed over the storage/transport ports plus the

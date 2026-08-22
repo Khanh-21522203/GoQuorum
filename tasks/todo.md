@@ -199,11 +199,71 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 ## Phase 4 — Explicit I/O Layer On<Event> Lifecycle Hooks
 
 ### What shipped, real and tested
-- `infra/transport/iouring.Client`: added explicit `OnPeerConnected`, `OnPeerDisconnected`, and `OnDialError` lifecycle hooks.
+- `infra/transport/iouring.Client`: added explicit `OnConnected`, `OnDisconnected`, and `OnConnectError` lifecycle hooks.
 - `infra/transport/iouring.conn`: updated connection lifecycle and `onDead(err)` callback to propagate disconnect causes cleanly.
-- `infra/transport/iouring.Server`: added `OnClientConnected(connFD, remoteAddr)` and `OnClientDisconnected(connFD, err)` lifecycle hooks.
+- `infra/transport/iouring.Server`: added `OnConnected(connFD, remoteAddr)`, `OnDisconnected(connFD, err)`, and `OnConnectError(err)` lifecycle hooks.
 - `infra/storage/journal.Store`: added `OnStorageError(err)` lifecycle hook and made `Close()` idempotent.
-- Verified: `TestServerClient_LifecycleHooks` in `infra/transport/iouring` (asserts `OnPeerConnected`, `OnPeerDisconnected`, `OnClientConnected`, `OnClientDisconnected`, and `OnDialError`) and `TestStore_OnStorageError_FiresOnDiskError` in `infra/storage/journal`.
-- Full `make test`, `make vet`, and `make build` pass clean across all workspace modules.
+- Verified: `TestServerClient_LifecycleHooks` in `infra/transport/iouring` and `TestStore_OnStorageError_FiresOnDiskError` in `infra/storage/journal`.
+
+## Phase 5 — Pure Event-Driven Transport & Storage Decoupling
+
+### What shipped, real and tested
+- `infra/transport/iouring`:
+  - Completely decoupled transport layer from domain RPC message types.
+  - Added `server.OnMessage(connFD, hdr, body)` and `server.Send(connFD, msgID, corrID, body)`.
+  - Added `client.OnMessage(id, hdr, body)` and `client.Send(id, msgID, corrID, body)`.
+  - Symmetrical 4-hook interface on both Client and Server.
+- `infra/pool`:
+  - Created generic `ArrayPool[T]` interface (`Rent(minCap)`, `Return(buf)`).
+  - Implemented `BucketArrayPool[T]` with power-of-two capacity bucketing (16, 32, 64, 128, 256, 512, 1024, 2048, 4096...).
+  - Full unit test suite in `infra/pool/array_pool_test.go`.
+- `infra/storage/journal`:
+  - Converted to pure raw-byte Key-Value WAL engine (`key []byte, val []byte`).
+  - Zero domain knowledge (no `SiblingSet`, `VectorClock`, or `NodeID`).
+  - Pure Command-Event model: `Get(reqID, key)`, `Put(reqID, key, val)`, `Delete(reqID, key)`, `Scan(scanID, start, end)`.
+  - 4 event hooks with setter methods: `SetOnReadComplete`, `SetOnWriteComplete`, `SetOnScanComplete`, `SetOnStorageError`.
+  - Integrated `pool.ArrayPool[ScanEntry]` for lock-free, zero-allocation, concurrent-safe in-flight scan batching.
+- `engine/storage`:
+  - Defined event-driven `KVStore` port interface over `journal.ScanEntry`.
+  - Implemented `Adapter` (`storage.NewAdapter(rawStore, nodeID)`) managing domain `SiblingSet` binary serialization, vector clock reconciliation, and TTL filtering over any `KVStore`.
+- Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 6 — Batched Parallel io_uring Scan with Forward-Sweep Offset Sorting
+
+### What shipped, real and tested
+- [x] 1. Designed `scanReadItem` struct tracking `{ slotIndex int, offset int64, length uint32 }`.
+- [x] 2. Updated `inFlightScan` state to track `{ items []ScanEntry, pendingCount int, failedErr error }`.
+- [x] 3. In `Scan(scanID, start, end)`:
+  - Sorts read items by `offset` ascending (Physical Forward-Sweep).
+  - Submits all `SubmitPread` SQEs concurrently in 1 batch.
+- [x] 4. In `HandleCompletion`:
+  - When each CQE arrives, decodes record and places directly into `items[slotIndex]` (preserving sorted key order).
+  - Decrements `pendingCount`. When 0, fires `OnScanComplete` and recycles buffer to `scanPool`.
+- [x] 5. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 7 — Adaptive Range Coalescing (Gap Clumping) for Scan
+
+### What shipped, real and tested
+- [x] 1. Defined `MaxCoalesceGap = 64 * 1024` (64KB) and `MaxChunkSize = 2 * 1024 * 1024` (2MB).
+- [x] 2. Implemented `coalesceReadItems`:
+  - Groups adjacent forward-sorted read items into coalesced spans when gap between records $\le$ `MaxCoalesceGap`.
+  - Tracks `{ slotIndex int, relOffset uint32, recordLen uint32 }` per item within the chunk buffer.
+- [x] 3. Updated `Scan` to submit $M$ chunk `SubmitPread` SQEs (where $M \le N$) instead of individual reads.
+- [x] 4. In `HandleCompletion`:
+  - On chunk CQE, unmarshals/unpacks all sub-records from `chunkBuf[relOffset : relOffset+recordLen]` directly into `scanState.items[slotIndex]`.
+  - Decrements `pendingCount`. When 0, fires `OnScanComplete` and returns buffer to `scanPool`.
+- [x] 5. Added unit test `TestStore_Scan_CoalescedDenseAndSparseRecords` in `infra/storage/journal/store_test.go`.
+- [x] 6. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 8 — Contiguous Slot Table Model & Bit-Packed In-Flight Tracking
+
+### What shipped, real and tested
+- [x] 1. Replaced 5 structs with 2 flat structs: `scanItem` `{ keyIndex, offset, length }` and `scanChunk` `{ offset, length, startItem, endItem, buf }`.
+- [x] 2. Eliminated `coalescedItemRef`, `coalescedChunk`, and `inFlightScanChunk` structs.
+- [x] 3. Deleted secondary `inFlightScanChunks` map from `Store`.
+- [x] 4. Encoded `(1 << 62) | (scanID << 16) | chunkIdx` into `io_uring` `UserData` for direct $O(1)$ chunk dispatch.
+- [x] 5. Implemented `coalesceScanItems` using index range `[startItem, endItem)` with zero nested slice allocations.
+- [x] 6. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
 
 

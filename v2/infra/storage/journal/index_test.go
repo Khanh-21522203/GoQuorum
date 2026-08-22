@@ -23,10 +23,10 @@ func TestIndex_SetGetDelete(t *testing.T) {
 func TestIndex_SetOverwritesPreviousEntry(t *testing.T) {
 	idx := newIndex()
 	idx.Set([]byte("k"), indexEntry{Offset: 0, Length: 1})
-	idx.Set([]byte("k"), indexEntry{Offset: 100, Length: 2, Tombstone: true})
+	idx.Set([]byte("k"), indexEntry{Offset: 100, Length: 2})
 
 	e, ok := idx.Get([]byte("k"))
-	if !ok || e.Offset != 100 || e.Length != 2 || !e.Tombstone {
+	if !ok || e.Offset != 100 || e.Length != 2 {
 		t.Fatalf("expected overwritten entry, got %+v ok=%v", e, ok)
 	}
 }
