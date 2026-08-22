@@ -2,9 +2,11 @@ package journal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"syscall"
 	"time"
 
 	"goquorum.io/v2/contracts/node"
@@ -42,6 +44,9 @@ type Store struct {
 
 	nextUserData uint64
 	pending      map[uint64]func(reactor.Event)
+
+	// OnStorageError is invoked whenever an underlying io_uring submit or completion reports an error.
+	OnStorageError func(err error)
 }
 
 var _ storage.Storage = (*Store)(nil)
@@ -84,6 +89,9 @@ func (s *Store) HandleCompletion(ev reactor.Event) {
 		return
 	}
 	delete(s.pending, ev.UserData)
+	if ev.Err != nil && s.OnStorageError != nil {
+		s.OnStorageError(ev.Err)
+	}
 	cb(ev)
 }
 
@@ -211,6 +219,9 @@ func (s *Store) writeRecord(key []byte, siblings *storage.SiblingSet, done func(
 	})
 	if err := s.rt.SubmitPwrite(s.fd, buf, uint64(offset), ud); err != nil {
 		s.unregister(ud)
+		if s.OnStorageError != nil {
+			s.OnStorageError(err)
+		}
 		done(fmt.Errorf("%w: submitting write for %q: %v", quorumerr.ErrStorageIO, keyCopy, err))
 	}
 }
@@ -237,6 +248,9 @@ func (s *Store) readRecord(entry indexEntry, done func(key []byte, siblings *sto
 	})
 	if err := s.rt.SubmitPread(s.fd, buf, uint64(entry.Offset), ud); err != nil {
 		s.unregister(ud)
+		if s.OnStorageError != nil {
+			s.OnStorageError(err)
+		}
 		done(nil, nil, fmt.Errorf("%w: submitting read: %v", quorumerr.ErrStorageIO, err))
 	}
 }
@@ -310,7 +324,12 @@ func (s *Store) Stats() storage.Stats {
 // Run has returned, so a plain blocking close is both correct and simpler
 // than routing a one-shot shutdown operation through io_uring.
 func (s *Store) Close() error {
-	if err := s.f.Close(); err != nil {
+	if s.f == nil {
+		return nil
+	}
+	err := s.f.Close()
+	s.f = nil
+	if err != nil && !errors.Is(err, os.ErrClosed) && !errors.Is(err, syscall.EBADF) {
 		return fmt.Errorf("%w: closing WAL file: %v", quorumerr.ErrStorageIO, err)
 	}
 	return nil

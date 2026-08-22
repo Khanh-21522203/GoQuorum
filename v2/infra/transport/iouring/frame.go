@@ -7,23 +7,18 @@ import (
 	"goquorum.io/v2/contracts/quorumerr"
 )
 
-// FrameHeaderSize is the fixed size, in bytes, of the header prefixing
-// every frame.
+// FrameHeaderSize is the fixed byte size of a frame header.
 const FrameHeaderSize = 16
 
-// FrameHeader is the fixed 16-byte header prefixing every frame exchanged
-// over a persistent per-peer connection.
+// FrameHeader is the fixed 16-byte prefix for all wire frames.
 //
-// Layout: [TotalLength uint32][MessageID uint16][SchemaVersion uint16]
-// [CorrelationID uint64]
+// 0               4          6              8                     16
+// ┌───────────────┬──────────┬──────────────┬──────────────────────┐
+// │  TotalLength  │MessageID │SchemaVersion │    CorrelationID     │
+// │   (uint32)    │ (uint16) │   (uint16)   │       (uint64)       │
+// └───────────────┴──────────┴──────────────┴──────────────────────┘
 //
-// TotalLength counts the ENTIRE frame, including these 16 header bytes.
-// This is deliberate: a reader that only understands an older
-// SchemaVersion can still locate the end of a frame produced by a newer
-// sender that appended extra trailing fields to the body, and skip past
-// those unknown bytes wholesale, without ever needing to understand the
-// newer body layout. Framing (via TotalLength) and body decoding (via
-// SchemaVersion-specific field layouts) are kept fully independent.
+// TotalLength includes the 16 header bytes plus the variable-length body.
 type FrameHeader struct {
 	TotalLength   uint32
 	MessageID     MessageID
@@ -31,8 +26,7 @@ type FrameHeader struct {
 	CorrelationID uint64
 }
 
-// EncodeFrame builds one complete frame: the 16-byte header followed by
-// body. TotalLength is computed and set automatically.
+// EncodeFrame serializes a frame header and body into wire format.
 func EncodeFrame(msgID uint16, schemaVersion uint16, correlationID uint64, body []byte) []byte {
 	total := FrameHeaderSize + len(body)
 	buf := make([]byte, FrameHeaderSize, total)
@@ -44,10 +38,7 @@ func EncodeFrame(msgID uint16, schemaVersion uint16, correlationID uint64, body 
 	return buf
 }
 
-// DecodeFrameHeader decodes the fixed 16-byte header from the front of
-// data. data may contain more than just the header (the rest of the frame
-// body, or even subsequent frames); only the first FrameHeaderSize bytes
-// are consulted.
+// DecodeFrameHeader parses the 16-byte header from the prefix of data.
 func DecodeFrameHeader(data []byte) (FrameHeader, error) {
 	if len(data) < FrameHeaderSize {
 		return FrameHeader{}, fmt.Errorf("%w: frame header truncated: need %d bytes, have %d", quorumerr.ErrCorruptedData, FrameHeaderSize, len(data))
@@ -60,45 +51,24 @@ func DecodeFrameHeader(data []byte) (FrameHeader, error) {
 	}, nil
 }
 
-// Reassembler incrementally reconstructs complete frames from a stream of
-// arbitrarily-chunked bytes, exactly as a raw socket recv would deliver
-// them: a single chunk may contain a partial frame, several complete
-// frames back to back, or a frame split across chunk boundaries anywhere
-// (including inside the 16-byte header itself). Feed appends a new chunk;
-// Next pops the next complete frame, if one is fully buffered. The zero
-// value is ready to use.
-//
-// Reassembler is not safe for concurrent use.
+// Reassembler buffers incoming TCP byte chunks and reconstructs discrete frames.
+// Not safe for concurrent use.
 type Reassembler struct {
 	buf []byte
 }
 
-// Feed appends a newly-received chunk to the reassembly buffer.
+// Feed appends a newly received TCP byte chunk to the accumulation buffer.
 func (r *Reassembler) Feed(chunk []byte) {
 	r.buf = append(r.buf, chunk...)
 }
 
-// Next returns the next complete frame buffered so far, if any. On success
-// it returns the decoded header, the frame body (the bytes after the
-// 16-byte header, up to TotalLength), and ok=true, and retains any
-// leftover bytes for the next Feed/Next cycle. If fewer than one complete
-// frame is currently buffered, it returns ok=false and leaves the buffer
-// untouched, so a later Feed can be followed by another Next call.
+// Next pops the next complete frame from the buffer, if available.
 func (r *Reassembler) Next() (FrameHeader, []byte, bool) {
 	if len(r.buf) < FrameHeaderSize {
 		return FrameHeader{}, nil, false
 	}
 	hdr, err := DecodeFrameHeader(r.buf)
-	if err != nil {
-		// Unreachable given the length check above, but guard anyway
-		// rather than assume.
-		return FrameHeader{}, nil, false
-	}
-	if hdr.TotalLength < FrameHeaderSize {
-		// A malformed/malicious header could never be a valid frame; there
-		// is no safe way to locate the next frame boundary, so this
-		// Reassembler simply refuses to make progress rather than panic or
-		// guess.
+	if err != nil || hdr.TotalLength < FrameHeaderSize {
 		return FrameHeader{}, nil, false
 	}
 	if uint32(len(r.buf)) < hdr.TotalLength {

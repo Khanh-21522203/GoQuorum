@@ -196,9 +196,14 @@ stays *on* the given core, not that the core is *exclusive* to it; true
 exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 `cpuset`), out of this package's scope.
 
-Verified: `TestLockToCore_PinsAffinityToExactlyOneCore` asserts against a
-real `unix.SchedGetaffinity` readback (not a mock) that exactly one core is
-set; `TestLockToCore_RejectsOutOfRangeCore` checks the bounds error. Full
-`go build`/`go vet`/`go test -race` across the whole workspace stayed clean,
-and `GOOS=darwin GOARCH=arm64 go build` confirms the `!linux` stub keeps this
-portable.
+## Phase 4 — Explicit I/O Layer On<Event> Lifecycle Hooks
+
+### What shipped, real and tested
+- `infra/transport/iouring.Client`: added explicit `OnPeerConnected`, `OnPeerDisconnected`, and `OnDialError` lifecycle hooks.
+- `infra/transport/iouring.conn`: updated connection lifecycle and `onDead(err)` callback to propagate disconnect causes cleanly.
+- `infra/transport/iouring.Server`: added `OnClientConnected(connFD, remoteAddr)` and `OnClientDisconnected(connFD, err)` lifecycle hooks.
+- `infra/storage/journal.Store`: added `OnStorageError(err)` lifecycle hook and made `Close()` idempotent.
+- Verified: `TestServerClient_LifecycleHooks` in `infra/transport/iouring` (asserts `OnPeerConnected`, `OnPeerDisconnected`, `OnClientConnected`, `OnClientDisconnected`, and `OnDialError`) and `TestStore_OnStorageError_FiresOnDiskError` in `infra/storage/journal`.
+- Full `make test`, `make vet`, and `make build` pass clean across all workspace modules.
+
+

@@ -161,7 +161,15 @@ func New(cfg *config.Config) (*Server, error) {
 		_ = tc.Dial(m.ID, m.HTTPAddr)
 	}
 
-	ts := iouring.NewServer(rt, heartbeatHandler{})
+	ts := iouring.NewServer(rt)
+	ts.OnMessage = func(connFD int, hdr iouring.FrameHeader, body []byte) {
+		switch hdr.MessageID {
+		case iouring.MsgHeartbeatRequest:
+			resp := iouring.HeartbeatResponse{Status: iouring.StatusOK}
+			respBody, _ := resp.Marshal()
+			_ = ts.Send(connFD, iouring.MsgHeartbeatResponse, hdr.CorrelationID, respBody)
+		}
+	}
 	if err := ts.Listen(localHTTPAddr); err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", localHTTPAddr, err)
 	}
@@ -303,15 +311,6 @@ func (s *Server) Stop() {
 		_ = s.runtime.Close()
 	}
 }
-
-// heartbeatHandler answers every liveness probe affirmatively: reaching
-// this method at all already proves the process is alive and its reactor
-// is running, which is everything a Heartbeat response promises.
-type heartbeatHandler struct{}
-
-func (heartbeatHandler) Heartbeat() error { return nil }
-
-var _ iouring.RequestHandler = heartbeatHandler{}
 
 // membershipConfig converts the loaded cluster configuration into
 // engine/membership.Config. infra/config has no ready-made Membership()

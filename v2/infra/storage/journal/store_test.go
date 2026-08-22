@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -445,5 +446,30 @@ func TestStore_TruncatedFileRecoversValidPrefixOnly(t *testing.T) {
 	gotB := ts2.get(t, []byte("b"))
 	if !errors.Is(gotB.err, quorumerr.ErrKeyNotFound) {
 		t.Fatalf("expected b (torn write) to be absent, got ss=%+v err=%v", gotB.ss, gotB.err)
+	}
+}
+
+func TestStore_OnStorageError_FiresOnDiskError(t *testing.T) {
+	rt := newTestRuntime(t)
+	path := filepath.Join(t.TempDir(), "error.log")
+	ts := openTestStore(t, rt, path)
+
+	storageErrors := make(chan error, 1)
+	ts.store.OnStorageError = func(err error) {
+		storageErrors <- err
+	}
+
+	// Close the underlying file descriptor so pwrite fails
+	_ = syscall.Close(ts.store.fd)
+
+	_ = ts.put(t, []byte("key"), &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("val")}}})
+
+	select {
+	case err := <-storageErrors:
+		if err == nil {
+			t.Fatal("expected non-nil storage error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnStorageError did not fire when file descriptor was invalid")
 	}
 }
