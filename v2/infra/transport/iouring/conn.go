@@ -7,6 +7,7 @@ import (
 
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/pool"
 )
 
 // wireSchemaVersion is the framing schema version written into outbound frames.
@@ -22,19 +23,33 @@ var errConnClosed = errors.New("iouring: connection closed")
 type tcpConn struct {
 	rt          *ioruntime.Runtime
 	fd          int
+	bytePool    *pool.BucketArrayPool[byte]
 	recvBuf     []byte
 	reassembler Reassembler
 	onDead      func(error)
 	closed      bool
 }
 
-func newTCPConn(rt *ioruntime.Runtime, fd int, onDead func(error)) tcpConn {
-	return tcpConn{
-		rt:      rt,
-		fd:      fd,
-		recvBuf: make([]byte, recvBufSize),
-		onDead:  onDead,
+func newTCPConn(rt *ioruntime.Runtime, bp *pool.BucketArrayPool[byte], fd int, onDead func(error)) tcpConn {
+	if bp == nil {
+		bp = pool.NewDefaultArrayPool[byte]()
 	}
+	recvBuf := bp.Rent(recvBufSize)
+	if cap(recvBuf) >= recvBufSize {
+		recvBuf = recvBuf[:recvBufSize]
+	} else {
+		recvBuf = make([]byte, recvBufSize)
+	}
+
+	c := tcpConn{
+		rt:       rt,
+		fd:       fd,
+		bytePool: bp,
+		recvBuf:  recvBuf,
+		onDead:   onDead,
+	}
+	c.reassembler.Init(bp, DefaultReassemblerCap)
+	return c
 }
 
 // armRecv submits an asynchronous io_uring recv on the connection socket.
@@ -70,12 +85,6 @@ func (c *tcpConn) processRecv(ev reactor.Event, onFrame func(FrameHeader, []byte
 	return nil
 }
 
-// sendFrame formats a frame and submits an async send over io_uring.
-func (c *tcpConn) sendFrame(seq uint64, msgID MessageID, correlationID uint64, body []byte) error {
-	frameBytes := EncodeFrame(uint16(msgID), wireSchemaVersion, correlationID, body)
-	return c.rt.SubmitSend(c.fd, frameBytes, makeUserData(c.fd, seq))
-}
-
 // fail closes the underlying socket and notifies the onDead observer.
 func (c *tcpConn) fail(err error) {
 	if c.closed {
@@ -83,6 +92,11 @@ func (c *tcpConn) fail(err error) {
 	}
 	c.closed = true
 	_ = syscall.Close(c.fd)
+	if c.bytePool != nil && cap(c.recvBuf) > 0 {
+		c.bytePool.Return(c.recvBuf)
+		c.recvBuf = nil
+	}
+	c.reassembler.Release()
 	if c.onDead != nil {
 		c.onDead(err)
 	}

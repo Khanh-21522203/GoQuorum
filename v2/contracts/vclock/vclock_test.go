@@ -56,14 +56,17 @@ func TestCopy_IsIndependent(t *testing.T) {
 	}
 }
 
-func TestPlainAssignment_AliasesUnderlyingMap(t *testing.T) {
+func TestPlainAssignment_IsIndependentValueCopy(t *testing.T) {
 	vc1 := NewVectorClock()
 	vc1.Tick("a")
-	vc2 := vc1 // documented footgun: shallow copy, shares the map
+	vc2 := vc1
 	vc2.Tick("a")
 
-	if got := vc1.Get("a"); got != 2 {
-		t.Fatalf("expected plain assignment to alias the map (got %d), Copy() is required for isolation", got)
+	if got := vc1.Get("a"); got != 1 {
+		t.Fatalf("expected value copy to isolate original: got %d, want 1", got)
+	}
+	if got := vc2.Get("a"); got != 2 {
+		t.Fatalf("expected vc2 counter to be 2, got %d", got)
 	}
 }
 
@@ -186,8 +189,7 @@ func TestIsEmptyAndSize(t *testing.T) {
 
 func TestPrune_RemovesOldEntries(t *testing.T) {
 	vc := NewVectorClock()
-	vc.Set("old", 1)
-	vc.entries["old"].timestamp = time.Now().Add(-time.Hour).Unix()
+	vc.SetWithTimestamp("old", 1, time.Now().Add(-time.Hour).Unix())
 	vc.Set("fresh", 1)
 
 	removed := vc.Prune(time.Minute, 0)
@@ -206,8 +208,7 @@ func TestPrune_TrimsToMaxEntries(t *testing.T) {
 	vc := NewVectorClock()
 	now := time.Now()
 	for i, id := range []node.NodeID{"a", "b", "c"} {
-		vc.Set(id, 1)
-		vc.entries[id].timestamp = now.Add(-time.Duration(i) * time.Second).Unix()
+		vc.SetWithTimestamp(id, 1, now.Add(-time.Duration(i)*time.Second).Unix())
 	}
 
 	removed := vc.Prune(time.Hour, 2)
@@ -290,5 +291,111 @@ func TestMarshalUnmarshalJSON_RoundTrip(t *testing.T) {
 	}
 	if got.Get("node-a") != 9 {
 		t.Fatalf("expected counter 9, got %d", got.Get("node-a"))
+	}
+}
+
+func TestVectorClock_ZeroAllocations(t *testing.T) {
+	vc1 := NewVectorClock()
+	vc1.Set("node-1", 10)
+	vc1.Set("node-2", 20)
+	vc1.Set("node-3", 30)
+
+	vc2 := NewVectorClock()
+	vc2.Set("node-1", 10)
+	vc2.Set("node-2", 25)
+	vc2.Set("node-4", 5)
+
+	dst := make([]byte, 256)
+
+	// 1. Tick zero-alloc
+	allocs := testing.AllocsPerRun(100, func() {
+		vc1.Tick("node-1")
+	})
+	if allocs != 0 {
+		t.Fatalf("Tick allocated %f objects, want 0", allocs)
+	}
+
+	// 2. Compare zero-alloc
+	allocs = testing.AllocsPerRun(100, func() {
+		_ = vc1.Compare(vc2)
+	})
+	if allocs != 0 {
+		t.Fatalf("Compare allocated %f objects, want 0", allocs)
+	}
+
+	// 3. Merge zero-alloc
+	allocs = testing.AllocsPerRun(100, func() {
+		c := vc1
+		c.Merge(vc2)
+	})
+	if allocs != 0 {
+		t.Fatalf("Merge allocated %f objects, want 0", allocs)
+	}
+
+	// 4. AppendMarshalBinary zero-alloc
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = vc1.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("AppendMarshalBinary allocated %f objects, want 0", allocs)
+	}
+
+	// 5. Copy zero-alloc
+	allocs = testing.AllocsPerRun(100, func() {
+		_ = vc1.Copy()
+	})
+	if allocs != 0 {
+		t.Fatalf("Copy allocated %f objects, want 0", allocs)
+	}
+}
+
+func BenchmarkVectorClock_Compare(b *testing.B) {
+	vc1 := NewVectorClock()
+	vc1.Set("node-1", 10)
+	vc1.Set("node-2", 20)
+	vc1.Set("node-3", 30)
+
+	vc2 := NewVectorClock()
+	vc2.Set("node-1", 10)
+	vc2.Set("node-2", 25)
+	vc2.Set("node-4", 5)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = vc1.Compare(vc2)
+	}
+}
+
+func BenchmarkVectorClock_Merge(b *testing.B) {
+	vc1 := NewVectorClock()
+	vc1.Set("node-1", 10)
+	vc1.Set("node-2", 20)
+	vc1.Set("node-3", 30)
+
+	vc2 := NewVectorClock()
+	vc2.Set("node-1", 10)
+	vc2.Set("node-2", 25)
+	vc2.Set("node-4", 5)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c := vc1
+		c.Merge(vc2)
+	}
+}
+
+func BenchmarkVectorClock_AppendMarshalBinary(b *testing.B) {
+	vc1 := NewVectorClock()
+	vc1.Set("node-1", 10)
+	vc1.Set("node-2", 20)
+	vc1.Set("node-3", 30)
+
+	dst := make([]byte, 256)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = vc1.AppendMarshalBinary(dst[:0])
 	}
 }

@@ -1,4 +1,4 @@
-package iouring
+package wire
 
 import (
 	"bytes"
@@ -577,4 +577,87 @@ func FuzzGossipExchangeResponseUnmarshal(f *testing.F) {
 		var r GossipExchangeResponse
 		_ = r.Unmarshal(data)
 	})
+}
+
+func TestWireCodecs_ZeroAllocations(t *testing.T) {
+	putReq := RemotePutRequest{Key: []byte("test-key"), Siblings: sampleSiblingSet()}
+	putResp := RemotePutResponse{Status: StatusOK}
+	getReq := RemoteGetRequest{Key: []byte("test-key")}
+	getResp := RemoteGetResponse{Status: StatusOK, Siblings: sampleSiblingSet()}
+	gossipReq := GossipExchangeRequest{Entries: sampleGossipEntries()}
+	gossipResp := GossipExchangeResponse{Entries: sampleGossipEntries()}
+
+	dst := make([]byte, 512)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = putReq.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("RemotePutRequest.AppendMarshalBinary allocated %f objects", allocs)
+	}
+
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = putResp.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("RemotePutResponse.AppendMarshalBinary allocated %f objects", allocs)
+	}
+
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = getReq.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("RemoteGetRequest.AppendMarshalBinary allocated %f objects", allocs)
+	}
+
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = getResp.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("RemoteGetResponse.AppendMarshalBinary allocated %f objects", allocs)
+	}
+
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = gossipReq.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("GossipExchangeRequest.AppendMarshalBinary allocated %f objects", allocs)
+	}
+
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _ = gossipResp.AppendMarshalBinary(dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("GossipExchangeResponse.AppendMarshalBinary allocated %f objects", allocs)
+	}
+}
+
+func BenchmarkRemotePutRequest_AppendMarshalBinary(b *testing.B) {
+	putReq := RemotePutRequest{Key: []byte("test-key"), Siblings: sampleSiblingSet()}
+	dst := make([]byte, 512)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = putReq.AppendMarshalBinary(dst[:0])
+	}
+}
+
+func BenchmarkRemoteGetRequest_AppendMarshalBinary(b *testing.B) {
+	getReq := RemoteGetRequest{Key: []byte("test-key")}
+	dst := make([]byte, 512)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = getReq.AppendMarshalBinary(dst[:0])
+	}
+}
+
+func BenchmarkGossipExchangeRequest_AppendMarshalBinary(b *testing.B) {
+	gossipReq := GossipExchangeRequest{Entries: sampleGossipEntries()}
+	dst := make([]byte, 512)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = gossipReq.AppendMarshalBinary(dst[:0])
+	}
 }

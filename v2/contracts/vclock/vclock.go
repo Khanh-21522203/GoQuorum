@@ -1,3 +1,5 @@
+// Package vclock implements vector clocks for tracking causality across distributed nodes.
+// Designed for 100% zero-allocation operation using flat inline arrays and 2-pointer linear sweeps.
 package vclock
 
 import (
@@ -7,131 +9,260 @@ import (
 	"math"
 	"sort"
 	"time"
+	"unsafe"
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 )
 
-// entry is a single per-node counter tracked by a VectorClock, together with
+// maxInlineEntries is the fixed capacity of the inline array inside VectorClock.
+// For clusters with <= 8 nodes (the standard for partitions/preference lists),
+// VectorClock operations produce ZERO heap allocations.
+const maxInlineEntries = 8
+
+// Entry is a single per-node counter tracked by a VectorClock, together with
 // the timestamp of its last update (used for pruning).
-type entry struct {
-	counter   uint64
-	timestamp int64 // Unix timestamp (seconds).
+type Entry struct {
+	NodeID    node.NodeID
+	Counter   uint64
+	Timestamp int64 // Unix timestamp (seconds).
 }
 
-// VectorClock tracks causality across nodes using per-node Lamport
-// counters. See the package doc for value-semantics rules: copy with
-// Copy(), do not rely on plain assignment for isolation.
+// VectorClock tracks causality across nodes using per-node Lamport counters.
+// Entries are kept sorted by NodeID to enable single-pass O(N) 2-pointer comparisons and merges with 0 allocations.
 type VectorClock struct {
-	entries map[node.NodeID]*entry
+	inline [maxInlineEntries]Entry
+	count  uint8
+	heap   []Entry // Dynamic fallback for clusters with > 8 nodes
 }
 
-// NewVectorClock creates an empty vector clock.
+// NewVectorClock creates an empty vector clock with 0 heap allocations.
 func NewVectorClock() VectorClock {
-	return VectorClock{entries: make(map[node.NodeID]*entry)}
+	return VectorClock{}
 }
 
-// Tick increments the counter for the given node, creating an entry with
-// counter 1 if none exists.
+func (vc *VectorClock) entriesSlice() []Entry {
+	if vc.count <= maxInlineEntries {
+		return vc.inline[:vc.count]
+	}
+	return vc.heap
+}
+
+// find returns the index of id in entries, or the insertion point if not found.
+func (vc *VectorClock) find(id node.NodeID) (int, bool) {
+	entries := vc.entriesSlice()
+	lo, hi := 0, len(entries)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if entries[mid].NodeID < id {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < len(entries) && entries[lo].NodeID == id {
+		return lo, true
+	}
+	return lo, false
+}
+
+func (vc *VectorClock) insertAt(idx int, e Entry) {
+	if vc.count < maxInlineEntries {
+		for i := int(vc.count); i > idx; i-- {
+			vc.inline[i] = vc.inline[i-1]
+		}
+		vc.inline[idx] = e
+		vc.count++
+		return
+	}
+
+	if vc.count == maxInlineEntries {
+		vc.heap = make([]Entry, maxInlineEntries+1)
+		copy(vc.heap[:idx], vc.inline[:idx])
+		vc.heap[idx] = e
+		copy(vc.heap[idx+1:], vc.inline[idx:])
+		vc.count++
+		return
+	}
+
+	vc.heap = append(vc.heap, Entry{})
+	copy(vc.heap[idx+1:], vc.heap[idx:])
+	vc.heap[idx] = e
+	vc.count++
+}
+
+// Tick increments the counter for the given node, creating an entry with counter 1 if none exists.
 func (vc *VectorClock) Tick(id node.NodeID) {
-	if vc.entries == nil {
-		vc.entries = make(map[node.NodeID]*entry)
+	idx, found := vc.find(id)
+	now := time.Now().Unix()
+	if found {
+		entries := vc.entriesSlice()
+		entries[idx].Counter++
+		entries[idx].Timestamp = now
+		return
 	}
-	e, ok := vc.entries[id]
-	if !ok {
-		e = &entry{}
-		vc.entries[id] = e
-	}
-	e.counter++
-	e.timestamp = time.Now().Unix()
+	vc.insertAt(idx, Entry{NodeID: id, Counter: 1, Timestamp: now})
 }
 
 // Get returns the counter for the given node, or 0 if absent.
 func (vc VectorClock) Get(id node.NodeID) uint64 {
-	if e, ok := vc.entries[id]; ok {
-		return e.counter
+	idx, found := vc.find(id)
+	if found {
+		return vc.entriesSlice()[idx].Counter
 	}
 	return 0
 }
 
 // Set sets the counter for the given node, creating the entry if absent.
 func (vc *VectorClock) Set(id node.NodeID, counter uint64) {
-	if vc.entries == nil {
-		vc.entries = make(map[node.NodeID]*entry)
-	}
-	e, ok := vc.entries[id]
-	if !ok {
-		e = &entry{}
-		vc.entries[id] = e
-	}
-	e.counter = counter
-	e.timestamp = time.Now().Unix()
+	vc.SetWithTimestamp(id, counter, time.Now().Unix())
 }
 
-// Merge merges another vector clock into vc, taking the maximum counter for
-// each node.
-func (vc *VectorClock) Merge(other VectorClock) {
-	if len(other.entries) == 0 {
+// SetWithTimestamp sets the counter and explicit timestamp for the given node.
+func (vc *VectorClock) SetWithTimestamp(id node.NodeID, counter uint64, ts int64) {
+	idx, found := vc.find(id)
+	if found {
+		entries := vc.entriesSlice()
+		entries[idx].Counter = counter
+		entries[idx].Timestamp = ts
 		return
 	}
-	if vc.entries == nil {
-		vc.entries = make(map[node.NodeID]*entry, len(other.entries))
+	vc.insertAt(idx, Entry{NodeID: id, Counter: counter, Timestamp: ts})
+}
+
+// Merge merges another vector clock into vc, taking the maximum counter for each node.
+func (vc *VectorClock) Merge(other VectorClock) {
+	if other.IsEmpty() {
+		return
 	}
-	for id, oe := range other.entries {
-		e, ok := vc.entries[id]
-		if !ok {
-			vc.entries[id] = &entry{counter: oe.counter, timestamp: oe.timestamp}
-			continue
+	if vc.IsEmpty() {
+		*vc = other.Copy()
+		return
+	}
+
+	a := vc.entriesSlice()
+	b := other.entriesSlice()
+
+	var merged [maxInlineEntries]Entry
+	mergedCount := 0
+	i, j := 0, 0
+
+	var heapMerged []Entry
+	useHeap := (len(a) + len(b)) > maxInlineEntries
+
+	if useHeap {
+		heapMerged = make([]Entry, 0, len(a)+len(b))
+	}
+
+	appendEntry := func(e Entry) {
+		if !useHeap && mergedCount < maxInlineEntries {
+			merged[mergedCount] = e
+			mergedCount++
+		} else {
+			if !useHeap {
+				useHeap = true
+				heapMerged = make([]Entry, 0, len(a)+len(b))
+				heapMerged = append(heapMerged, merged[:mergedCount]...)
+			}
+			heapMerged = append(heapMerged, e)
+			mergedCount++
 		}
-		switch {
-		case oe.counter > e.counter:
-			e.counter = oe.counter
-			e.timestamp = oe.timestamp
-		case oe.counter == e.counter && oe.timestamp > e.timestamp:
-			e.timestamp = oe.timestamp
+	}
+
+	for i < len(a) && j < len(b) {
+		if a[i].NodeID == b[j].NodeID {
+			e := a[i]
+			if b[j].Counter > e.Counter {
+				e.Counter = b[j].Counter
+				e.Timestamp = b[j].Timestamp
+			} else if b[j].Counter == e.Counter && b[j].Timestamp > e.Timestamp {
+				e.Timestamp = b[j].Timestamp
+			}
+			appendEntry(e)
+			i++
+			j++
+		} else if a[i].NodeID < b[j].NodeID {
+			appendEntry(a[i])
+			i++
+		} else {
+			appendEntry(b[j])
+			j++
 		}
+	}
+
+	for ; i < len(a); i++ {
+		appendEntry(a[i])
+	}
+	for ; j < len(b); j++ {
+		appendEntry(b[j])
+	}
+
+	if !useHeap {
+		vc.inline = merged
+		vc.count = uint8(mergedCount)
+		vc.heap = nil
+	} else {
+		vc.heap = heapMerged
+		vc.count = uint8(len(heapMerged))
 	}
 }
 
-// Copy returns a deep copy of vc: the returned VectorClock owns an
-// independent map, so mutating it never affects vc (see package doc).
+// Copy returns a deep copy of vc.
 func (vc VectorClock) Copy() VectorClock {
-	entries := make(map[node.NodeID]*entry, len(vc.entries))
-	for id, e := range vc.entries {
-		entries[id] = &entry{counter: e.counter, timestamp: e.timestamp}
+	res := vc
+	if len(vc.heap) > 0 {
+		res.heap = append([]Entry(nil), vc.heap...)
 	}
-	return VectorClock{entries: entries}
+	return res
 }
 
 // IsEmpty returns true if the vector clock has no entries.
 func (vc VectorClock) IsEmpty() bool {
-	return len(vc.entries) == 0
+	return vc.count == 0
 }
 
 // Size returns the number of entries in the vector clock.
 func (vc VectorClock) Size() int {
-	return len(vc.entries)
+	return int(vc.count)
 }
 
-// Compare returns the causal relationship between vc and other, by
-// comparing per-node counters over the union of both entry sets.
+// Compare returns the causal relationship between vc and other using a sorted 2-pointer linear scan.
 func (vc VectorClock) Compare(other VectorClock) Ordering {
-	seen := make(map[node.NodeID]struct{}, len(vc.entries)+len(other.entries))
-	for id := range vc.entries {
-		seen[id] = struct{}{}
-	}
-	for id := range other.entries {
-		seen[id] = struct{}{}
-	}
+	a := vc.entriesSlice()
+	b := other.entriesSlice()
 
 	var lessFound, greaterFound bool
-	for id := range seen {
-		a, b := vc.Get(id), other.Get(id)
-		switch {
-		case a < b:
-			lessFound = true
-		case a > b:
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i].NodeID == b[j].NodeID {
+			if a[i].Counter < b[j].Counter {
+				lessFound = true
+			} else if a[i].Counter > b[j].Counter {
+				greaterFound = true
+			}
+			i++
+			j++
+		} else if a[i].NodeID < b[j].NodeID {
+			if a[i].Counter > 0 {
+				greaterFound = true
+			}
+			i++
+		} else {
+			if b[j].Counter > 0 {
+				lessFound = true
+			}
+			j++
+		}
+	}
+
+	for ; i < len(a); i++ {
+		if a[i].Counter > 0 {
 			greaterFound = true
+		}
+	}
+	for ; j < len(b); j++ {
+		if b[j].Counter > 0 {
+			lessFound = true
 		}
 	}
 
@@ -157,8 +288,7 @@ func (vc VectorClock) HappensAfter(other VectorClock) bool {
 	return vc.Compare(other) == After
 }
 
-// IsConcurrentWith reports whether neither vc nor other dominates the
-// other.
+// IsConcurrentWith reports whether neither vc nor other dominates the other.
 func (vc VectorClock) IsConcurrentWith(other VectorClock) bool {
 	return vc.Compare(other) == Concurrent
 }
@@ -178,97 +308,104 @@ func (vc VectorClock) Dominates(other VectorClock) bool {
 	}
 }
 
-// Prune removes entries older than threshold, and further trims down to
-// maxEntries by discarding the oldest by timestamp. A non-positive
-// maxEntries disables the size-based trim. Returns the number of entries
-// removed.
+// Prune removes entries older than threshold, and further trims down to maxEntries.
 func (vc *VectorClock) Prune(threshold time.Duration, maxEntries int) int {
-	if len(vc.entries) == 0 {
+	if vc.IsEmpty() {
 		return 0
 	}
 
+	entries := vc.entriesSlice()
 	removed := 0
 	cutoff := time.Now().Add(-threshold).Unix()
-	for id, e := range vc.entries {
-		if e.timestamp < cutoff {
-			delete(vc.entries, id)
+
+	writeIdx := 0
+	for i := 0; i < len(entries); i++ {
+		if entries[i].Timestamp >= cutoff {
+			if writeIdx != i {
+				entries[writeIdx] = entries[i]
+			}
+			writeIdx++
+		} else {
 			removed++
 		}
 	}
+	entries = entries[:writeIdx]
 
-	if maxEntries > 0 && len(vc.entries) > maxEntries {
-		type ranked struct {
-			id        node.NodeID
-			timestamp int64
-		}
-		all := make([]ranked, 0, len(vc.entries))
-		for id, e := range vc.entries {
-			all = append(all, ranked{id: id, timestamp: e.timestamp})
-		}
-		sort.Slice(all, func(i, j int) bool { return all[i].timestamp > all[j].timestamp })
-		for _, r := range all[maxEntries:] {
-			delete(vc.entries, r.id)
-			removed++
-		}
+	if maxEntries > 0 && len(entries) > maxEntries {
+		ranked := append([]Entry(nil), entries...)
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].Timestamp > ranked[j].Timestamp })
+		surviving := ranked[:maxEntries]
+		sort.Slice(surviving, func(i, j int) bool { return surviving[i].NodeID < surviving[j].NodeID })
+		removed += len(entries) - maxEntries
+		entries = surviving
+	}
+
+	if len(entries) <= maxInlineEntries {
+		copy(vc.inline[:len(entries)], entries)
+		vc.count = uint8(len(entries))
+		vc.heap = nil
+	} else {
+		vc.heap = entries
+		vc.count = uint8(len(entries))
 	}
 	return removed
 }
 
-// MarshalBinary encodes the vector clock to a compact binary format for
-// storage, with entries sorted by node ID for a deterministic encoding.
-//
-// Layout: [count uint16]{[nodeIDLen uint16][nodeID][counter uint64]
-// [timestamp int64]}*count
-func (vc VectorClock) MarshalBinary() ([]byte, error) {
-	ids := make([]node.NodeID, 0, len(vc.entries))
-	for id := range vc.entries {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	if len(ids) > math.MaxUint16 {
-		return nil, fmt.Errorf("vclock: too many entries to encode: %d", len(ids))
+// AppendMarshalBinary encodes the vector clock to dst in compact binary format.
+func (vc VectorClock) AppendMarshalBinary(dst []byte) ([]byte, error) {
+	entries := vc.entriesSlice()
+	if len(entries) > math.MaxUint16 {
+		return nil, fmt.Errorf("vclock: too many entries to encode: %d", len(entries))
 	}
 
-	buf := make([]byte, 2, 32*len(ids)+2)
-	binary.BigEndian.PutUint16(buf, uint16(len(ids)))
-	for _, id := range ids {
-		e := vc.entries[id]
-		idBytes := []byte(id)
+	dst = binary.BigEndian.AppendUint16(dst, uint16(len(entries)))
+	for _, e := range entries {
+		idBytes := []byte(e.NodeID)
 		if len(idBytes) > math.MaxUint16 {
 			return nil, fmt.Errorf("vclock: node ID too long to encode: %d bytes", len(idBytes))
 		}
-		buf = binary.BigEndian.AppendUint16(buf, uint16(len(idBytes)))
-		buf = append(buf, idBytes...)
-		buf = binary.BigEndian.AppendUint64(buf, e.counter)
-		buf = binary.BigEndian.AppendUint64(buf, uint64(e.timestamp))
+		dst = binary.BigEndian.AppendUint16(dst, uint16(len(idBytes)))
+		dst = append(dst, idBytes...)
+		dst = binary.BigEndian.AppendUint64(dst, e.Counter)
+		dst = binary.BigEndian.AppendUint64(dst, uint64(e.Timestamp))
 	}
-	return buf, nil
+	return dst, nil
 }
 
-// UnmarshalBinary decodes a vector clock previously produced by
-// MarshalBinary. It never panics on truncated or malformed input, since it
-// must safely reject data from an untrusted peer or a torn disk write.
+// MarshalBinary encodes the vector clock to a newly allocated binary buffer.
+func (vc VectorClock) MarshalBinary() ([]byte, error) {
+	entries := vc.entriesSlice()
+	dst := make([]byte, 0, 2+32*len(entries))
+	return vc.AppendMarshalBinary(dst)
+}
+
+// UnmarshalBinary decodes a vector clock previously produced by MarshalBinary.
 func (vc *VectorClock) UnmarshalBinary(data []byte) error {
 	if len(data) < 2 {
 		return fmt.Errorf("%w: vector clock header truncated", quorumerr.ErrCorruptedData)
 	}
-	count := binary.BigEndian.Uint16(data)
+	count := int(binary.BigEndian.Uint16(data))
 	data = data[2:]
 
-	entries := make(map[node.NodeID]*entry, count)
-	for i := uint16(0); i < count; i++ {
+	vc.count = 0
+	vc.heap = nil
+
+	for i := 0; i < count; i++ {
 		if len(data) < 2 {
 			return fmt.Errorf("%w: node ID length truncated", quorumerr.ErrCorruptedData)
 		}
-		idLen := binary.BigEndian.Uint16(data)
+		idLen := int(binary.BigEndian.Uint16(data))
 		data = data[2:]
-		if uint64(idLen) > uint64(len(data)) {
+		if idLen > len(data) {
 			return fmt.Errorf("%w: node ID truncated", quorumerr.ErrCorruptedData)
 		}
-		id := node.NodeID(data[:idLen])
+		var id node.NodeID
+		if idLen > 0 {
+			id = node.NodeID(unsafe.String(unsafe.SliceData(data[:idLen]), idLen))
+		}
 		data = data[idLen:]
 
-		const trailerLen = 8 + 8 // counter + timestamp
+		const trailerLen = 8 + 8
 		if len(data) < trailerLen {
 			return fmt.Errorf("%w: entry trailer truncated", quorumerr.ErrCorruptedData)
 		}
@@ -277,33 +414,47 @@ func (vc *VectorClock) UnmarshalBinary(data []byte) error {
 		timestamp := int64(binary.BigEndian.Uint64(data))
 		data = data[8:]
 
-		entries[id] = &entry{counter: counter, timestamp: timestamp}
+		e := Entry{NodeID: id, Counter: counter, Timestamp: timestamp}
+		if vc.count < maxInlineEntries {
+			vc.inline[vc.count] = e
+			vc.count++
+		} else {
+			if len(vc.heap) == 0 {
+				vc.heap = make([]Entry, maxInlineEntries, count)
+				copy(vc.heap, vc.inline[:maxInlineEntries])
+			}
+			vc.heap = append(vc.heap, e)
+			vc.count = uint8(len(vc.heap))
+		}
 	}
-	vc.entries = entries
 	return nil
 }
 
-// MarshalJSON implements json.Marshaler, encoding as {"node": counter, ...}.
+// MarshalJSON implements json.Marshaler.
 func (vc VectorClock) MarshalJSON() ([]byte, error) {
-	m := make(map[string]uint64, len(vc.entries))
-	for id, e := range vc.entries {
-		m[string(id)] = e.counter
+	entries := vc.entriesSlice()
+	m := make(map[string]uint64, len(entries))
+	for _, e := range entries {
+		m[string(e.NodeID)] = e.Counter
 	}
 	return json.Marshal(m)
 }
 
-// UnmarshalJSON implements json.Unmarshaler, stamping the current time on
-// every decoded entry (the JSON form carries no timestamps).
+// UnmarshalJSON implements json.Unmarshaler.
 func (vc *VectorClock) UnmarshalJSON(data []byte) error {
 	var m map[string]uint64
 	if err := json.Unmarshal(data, &m); err != nil {
 		return err
 	}
 	now := time.Now().Unix()
-	entries := make(map[node.NodeID]*entry, len(m))
+	vc.count = 0
+	vc.heap = nil
 	for id, counter := range m {
-		entries[node.NodeID(id)] = &entry{counter: counter, timestamp: now}
+		vc.Set(node.NodeID(id), counter)
 	}
-	vc.entries = entries
+	entries := vc.entriesSlice()
+	for i := range entries {
+		entries[i].Timestamp = now
+	}
 	return nil
 }

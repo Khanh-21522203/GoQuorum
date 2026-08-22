@@ -72,3 +72,12 @@ func (st *SlotTable[T]) Reset() {
 		st.slots[i].Value = zero
 	}
 }
+
+// ForEach iterates over all currently active slots.
+func (st *SlotTable[T]) ForEach(fn func(id uint64, slot *Slot[T])) {
+	for i := range st.slots {
+		if st.slots[i].Active {
+			fn(st.slots[i].ID, &st.slots[i])
+		}
+	}
+}

@@ -58,9 +58,9 @@ func NewArrayPool[T any](minCap, numBuckets, maxPerBucket int) *BucketArrayPool[
 	}
 }
 
-// NewDefaultArrayPool creates a standard ArrayPool suitable for general slice pooling.
+// NewDefaultArrayPool creates a standard ArrayPool suitable for general slice and I/O pooling.
 func NewDefaultArrayPool[T any]() *BucketArrayPool[T] {
-	return NewArrayPool[T](16, 12, 8)
+	return NewArrayPool[T](64, 16, 64)
 }
 
 // Rent returns a slice with length 0 and capacity >= minCap.

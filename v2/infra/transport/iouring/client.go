@@ -2,72 +2,77 @@ package iouring
 
 import (
 	"fmt"
-	"time"
 
-	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/engine/reactor"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/pool"
 )
 
-// defaultRequestTimeout bounds RPC reply wait duration.
-const defaultRequestTimeout = 5 * time.Second
+// ClientHandler receives asynchronous network events from Client via static method dispatch.
+type ClientHandler interface {
+	// OnFrame is called when an inbound framed message arrives from peer id.
+	OnFrame(id node.NodeID, hdr FrameHeader, body []byte)
 
-// pendingRequest tracks an in-flight RPC awaiting a reply.
-type pendingRequest struct {
-	onReply func(FrameHeader, []byte, error)
-	timer   reactor.TimerID
+	// OnConnected is called when a connection to peer id is established.
+	OnConnected(id node.NodeID, addr string)
+
+	// OnDisconnected is called when a connection to peer id dies or is closed.
+	OnDisconnected(id node.NodeID, err error)
+
+	// OnConnectError is called when establishing connection to peer id fails.
+	OnConnectError(id node.NodeID, err error)
 }
 
-// Client implements engine/transport.Transport over the io_uring wire protocol.
+// Client is a pure, domain-agnostic io_uring transport engine multiplexing peer sockets.
 type Client struct {
-	rt *ioruntime.Runtime
-	r  *reactor.Reactor
-
-	requestTimeout time.Duration
+	rt       *ioruntime.Runtime
+	r        *reactor.Reactor
+	bytePool *pool.BucketArrayPool[byte]
+	handler  ClientHandler
 
 	addrs map[node.NodeID]string
 	conns map[node.NodeID]*clientConn
 	byFD  map[int]*clientConn
-
-	// OnConnected is invoked when a connection to peer id is established.
-	OnConnected func(id node.NodeID, addr string)
-
-	// OnDisconnected is invoked when a connection to peer id dies or is closed.
-	OnDisconnected func(id node.NodeID, err error)
-
-	// OnConnectError is invoked when connecting to peer id fails.
-	OnConnectError func(id node.NodeID, err error)
-
-	// OnMessage is invoked when an unsolicited (non-RPC reply) framed message arrives.
-	OnMessage func(id node.NodeID, hdr FrameHeader, body []byte)
 }
 
-var _ transport.Transport = (*Client)(nil)
-
-// NewClient creates a new io_uring transport Client.
-func NewClient(rt *ioruntime.Runtime, r *reactor.Reactor) *Client {
+// NewClient creates a new pure transport Client.
+func NewClient(rt *ioruntime.Runtime, r *reactor.Reactor, handler ClientHandler) *Client {
 	return &Client{
-		rt:             rt,
-		r:              r,
-		requestTimeout: defaultRequestTimeout,
-		addrs:          make(map[node.NodeID]string),
-		conns:          make(map[node.NodeID]*clientConn),
-		byFD:           make(map[int]*clientConn),
+		rt:       rt,
+		r:        r,
+		bytePool: pool.NewDefaultArrayPool[byte](),
+		handler:  handler,
+		addrs:    make(map[node.NodeID]string),
+		conns:    make(map[node.NodeID]*clientConn),
+		byFD:     make(map[int]*clientConn),
 	}
 }
 
-// Dial registers a peer's address and establishes a connection.
+// SetHandler sets or updates the event hookback handler.
+func (c *Client) SetHandler(h ClientHandler) {
+	c.handler = h
+}
+
+// Dial registers a peer address and establishes a connection.
 func (c *Client) Dial(id node.NodeID, addr string) error {
 	c.addrs[id] = addr
 	_, err := c.connect(id)
 	return err
 }
 
-// Send transmits a framed message to peer id without expecting an RPC reply.
-func (c *Client) Send(id node.NodeID, msgID MessageID, correlationID uint64, body []byte) error {
+// Send transmits a one-way frame without expecting an RPC response.
+func (c *Client) Send(id node.NodeID, msgID uint16, correlationID uint64, body []byte) error {
+	cn, err := c.connFor(id)
+	if err != nil {
+		return err
+	}
+	return cn.send(msgID, correlationID, body)
+}
+
+// Request transmits a two-way RPC frame. When the response frame arrives,
+// ClientHandler.OnResponse is invoked with matching CorrelationID (0 closures!).
+func (c *Client) Request(id node.NodeID, msgID uint16, correlationID uint64, body []byte) error {
 	cn, err := c.connFor(id)
 	if err != nil {
 		return err
@@ -85,32 +90,31 @@ func (c *Client) HandleCompletion(ev reactor.Event) bool {
 	return cn.HandleCompletion(ev)
 }
 
-// connect establishes a connection to id using its configured address.
 func (c *Client) connect(id node.NodeID) (*clientConn, error) {
 	addr, ok := c.addrs[id]
 	if !ok {
 		err := fmt.Errorf("iouring: no known address for node %q; call Dial first", id)
-		if c.OnConnectError != nil {
-			c.OnConnectError(id, err)
+		if c.handler != nil {
+			c.handler.OnConnectError(id, err)
 		}
 		return nil, err
 	}
 	var cn *clientConn
 	var err error
-	cn, err = dialClientConn(c.rt, c.r, id, c, addr, func(dErr error) {
+	cn, err = dialClientConn(c.rt, c.bytePool, c.r, id, c, addr, func(dErr error) {
 		if cn != nil {
 			delete(c.byFD, cn.fd)
 		}
 		if c.conns[id] == cn {
 			delete(c.conns, id)
 		}
-		if c.OnDisconnected != nil {
-			c.OnDisconnected(id, dErr)
+		if c.handler != nil {
+			c.handler.OnDisconnected(id, dErr)
 		}
 	})
 	if err != nil {
-		if c.OnConnectError != nil {
-			c.OnConnectError(id, err)
+		if c.handler != nil {
+			c.handler.OnConnectError(id, err)
 		}
 		return nil, err
 	}
@@ -120,65 +124,17 @@ func (c *Client) connect(id node.NodeID) (*clientConn, error) {
 	}
 	c.conns[id] = cn
 	c.byFD[cn.fd] = cn
-	if c.OnConnected != nil {
-		c.OnConnected(id, addr)
+	if c.handler != nil {
+		c.handler.OnConnected(id, addr)
 	}
 	return cn, nil
 }
 
-// connFor returns id's live connection or lazily reconnects if closed.
 func (c *Client) connFor(id node.NodeID) (*clientConn, error) {
 	if cn, ok := c.conns[id]; ok && !cn.closed {
 		return cn, nil
 	}
 	return c.connect(id)
-}
-
-// Heartbeat sends a heartbeat ping to node id.
-func (c *Client) Heartbeat(id node.NodeID, done func(error)) {
-	cn, err := c.connFor(id)
-	if err != nil {
-		done(err)
-		return
-	}
-	body, _ := (HeartbeatRequest{}).Marshal() // never fails: no fields to encode.
-	cn.sendRequest(MsgHeartbeatRequest, body, c.requestTimeout, func(hdr FrameHeader, respBody []byte, err error) {
-		if err != nil {
-			done(err)
-			return
-		}
-		var resp HeartbeatResponse
-		if err := resp.Unmarshal(respBody); err != nil {
-			done(err)
-			return
-		}
-		done(StatusCodeToError(resp.Status))
-	})
-}
-
-// RemotePut replicates a write to node id.
-func (c *Client) RemotePut(id node.NodeID, key []byte, siblings *storage.SiblingSet, done func(error)) {
-	done(contracts.ErrNotImplemented)
-}
-
-// RemoteGet reads a key's sibling set from node id.
-func (c *Client) RemoteGet(id node.NodeID, key []byte, done func(*storage.SiblingSet, error)) {
-	done(nil, contracts.ErrNotImplemented)
-}
-
-// GetMerkleRoot fetches node id's current anti-entropy Merkle root.
-func (c *Client) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
-	done(nil, contracts.ErrNotImplemented)
-}
-
-// NotifyLeaving informs node id that the local node is leaving the cluster gracefully.
-func (c *Client) NotifyLeaving(id node.NodeID, done func(error)) {
-	done(contracts.ErrNotImplemented)
-}
-
-// GossipExchange sends the local node's gossip state to node id and returns its reply.
-func (c *Client) GossipExchange(id node.NodeID, entries []transport.GossipEntry, done func([]transport.GossipEntry, error)) {
-	done(nil, contracts.ErrNotImplemented)
 }
 
 // Close releases every connection this Client holds.
@@ -191,35 +147,30 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// clientConn manages an outbound connection multiplexing concurrent RPC requests.
+// clientConn manages an outbound socket connection.
 type clientConn struct {
 	tcpConn
 
-	client *Client
-	id     node.NodeID
-	r      *reactor.Reactor
-	addr   string
-
-	nextCorrelationID uint64
-	nextSendSeq       uint64
-	pending           map[uint64]pendingRequest
-	sendCorrelation   map[uint64]uint64
+	client    *Client
+	id        node.NodeID
+	r         *reactor.Reactor
+	addr      string
+	nextReqID uint64
+	sendSlots *pool.SlotTable[[]byte]
 }
 
-// dialClientConn establishes a TCP connection to addr and arms the receive loop.
-func dialClientConn(rt *ioruntime.Runtime, r *reactor.Reactor, id node.NodeID, client *Client, addr string, onDead func(error)) (*clientConn, error) {
+func dialClientConn(rt *ioruntime.Runtime, bp *pool.BucketArrayPool[byte], r *reactor.Reactor, id node.NodeID, client *Client, addr string, onDead func(error)) (*clientConn, error) {
 	fd, err := connectTCP(addr)
 	if err != nil {
 		return nil, err
 	}
 	c := &clientConn{
-		tcpConn:         newTCPConn(rt, fd, onDead),
-		client:          client,
-		id:              id,
-		r:               r,
-		addr:            addr,
-		pending:         make(map[uint64]pendingRequest),
-		sendCorrelation: make(map[uint64]uint64),
+		tcpConn:   newTCPConn(rt, bp, fd, onDead),
+		client:    client,
+		id:        id,
+		r:         r,
+		addr:      addr,
+		sendSlots: pool.NewSlotTable[[]byte](1024),
 	}
 	if err := c.armRecv(); err != nil {
 		c.fail(err)
@@ -228,7 +179,6 @@ func dialClientConn(rt *ioruntime.Runtime, r *reactor.Reactor, id node.NodeID, c
 	return c, nil
 }
 
-// HandleCompletion dispatches an io_uring completion event to this clientConn.
 func (c *clientConn) HandleCompletion(ev reactor.Event) bool {
 	fd, seq := splitUserData(ev.UserData)
 	if fd != c.fd {
@@ -246,98 +196,72 @@ func (c *clientConn) onRecvCompletion(ev reactor.Event) {
 	if c.closed {
 		return
 	}
-	if err := c.processRecv(ev, c.dispatchReply); err != nil {
+	if err := c.processRecv(ev, c.dispatchFrame); err != nil {
 		c.fail(err)
 	}
 }
 
-func (c *clientConn) dispatchReply(hdr FrameHeader, body []byte) {
-	p, ok := c.pending[hdr.CorrelationID]
-	if ok {
-		delete(c.pending, hdr.CorrelationID)
-		c.r.CancelTimer(p.timer)
-		p.onReply(hdr, body, nil)
-		return
-	}
-	if c.client != nil && c.client.OnMessage != nil {
-		c.client.OnMessage(c.id, hdr, body)
+func (c *clientConn) dispatchFrame(hdr FrameHeader, body []byte) {
+	if c.client != nil && c.client.handler != nil {
+		c.client.handler.OnFrame(c.id, hdr, body)
 	}
 }
 
 func (c *clientConn) onSendCompletion(ev reactor.Event, seq uint64) {
-	ud := makeUserData(c.fd, seq)
-	correlationID, ok := c.sendCorrelation[ud]
-	delete(c.sendCorrelation, ud)
-	if !ok || ev.Err == nil {
+	if seq == 0 {
 		return
 	}
-	p, ok := c.pending[correlationID]
-	if !ok {
-		return
+	slotID := seq - 1
+	slot, ok := c.sendSlots.Get(slotID)
+	if ok {
+		if c.bytePool != nil && cap(slot.Value) > 0 {
+			c.bytePool.Return(slot.Value)
+		}
+		c.sendSlots.Release(slotID)
 	}
-	delete(c.pending, correlationID)
-	c.r.CancelTimer(p.timer)
-	p.onReply(FrameHeader{}, nil, fmt.Errorf("iouring: sending request: %w", ev.Err))
+	if ev.Err != nil {
+		c.fail(ev.Err)
+	}
 }
 
-func (c *clientConn) send(msgID MessageID, correlationID uint64, body []byte) error {
+func (c *clientConn) send(msgID uint16, correlationID uint64, body []byte) error {
 	if c.closed {
 		return errConnClosed
 	}
-	c.nextSendSeq++
-	if c.nextSendSeq == 0 {
-		c.nextSendSeq++
+	c.nextReqID++
+	slotID := c.nextReqID
+	slot := c.sendSlots.Acquire(slotID)
+
+	totalLen := FrameHeaderSize + len(body)
+	var sendBuf []byte
+	if c.bytePool != nil {
+		sendBuf = c.bytePool.Rent(totalLen)
 	}
-	return c.sendFrame(c.nextSendSeq, msgID, correlationID, body)
+	frameBytes := EncodeFrameTo(sendBuf, msgID, wireSchemaVersion, correlationID, body)
+	slot.Value = frameBytes
+
+	sendSeq := slotID + 1
+	if err := c.rt.SubmitSend(c.fd, frameBytes, makeUserData(c.fd, sendSeq)); err != nil {
+		c.sendSlots.Release(slotID)
+		if c.bytePool != nil && cap(frameBytes) > 0 {
+			c.bytePool.Return(frameBytes)
+		}
+		return err
+	}
+	return nil
 }
 
-// sendRequest transmits a framed RPC request and registers a reply callback.
-func (c *clientConn) sendRequest(msgID MessageID, body []byte, timeout time.Duration, onReply func(FrameHeader, []byte, error)) {
-	if c.closed {
-		onReply(FrameHeader{}, nil, errConnClosed)
-		return
-	}
-
-	c.nextCorrelationID++
-	correlationID := c.nextCorrelationID
-
-	timer := c.r.ScheduleOnce(timeout, func() {
-		p, ok := c.pending[correlationID]
-		if !ok {
-			return
-		}
-		delete(c.pending, correlationID)
-		p.onReply(FrameHeader{}, nil, fmt.Errorf("iouring: request %s: timed out waiting for reply", msgID))
-	})
-	c.pending[correlationID] = pendingRequest{onReply: onReply, timer: timer}
-
-	c.nextSendSeq++
-	if c.nextSendSeq == 0 { // guard reserved recv sequence (0) on wraparound
-		c.nextSendSeq++
-	}
-	ud := makeUserData(c.fd, c.nextSendSeq)
-	c.sendCorrelation[ud] = correlationID
-
-	if err := c.sendFrame(c.nextSendSeq, msgID, correlationID, body); err != nil {
-		delete(c.sendCorrelation, ud)
-		if p, ok := c.pending[correlationID]; ok {
-			delete(c.pending, correlationID)
-			c.r.CancelTimer(p.timer)
-			p.onReply(FrameHeader{}, nil, fmt.Errorf("iouring: submitting send: %w", err))
-		}
-	}
-}
-
-// fail tears down the connection and cancels all pending requests.
 func (c *clientConn) fail(err error) {
 	if c.closed {
 		return
 	}
-	for id, p := range c.pending {
-		delete(c.pending, id)
-		c.r.CancelTimer(p.timer)
-		p.onReply(FrameHeader{}, nil, err)
+	if c.sendSlots != nil {
+		c.sendSlots.ForEach(func(id uint64, s *pool.Slot[[]byte]) {
+			if c.bytePool != nil && cap(s.Value) > 0 {
+				c.bytePool.Return(s.Value)
+			}
+		})
+		c.sendSlots.Reset()
 	}
-	c.sendCorrelation = nil
 	c.tcpConn.fail(err)
 }

@@ -39,39 +39,46 @@ type Stats struct {
 	WALBytesWritten uint64
 }
 
-// MarshalBinary encodes the sibling set to a compact binary format, shared
-// by every storage and transport adapter so this encoding exists in
-// exactly one place.
-//
-// Layout: [count uint16]{[valueLen uint32][value][vclockLen uint32][vclock]
-// [timestamp int64][tombstone byte][expiresAt int64]}*count
+// AppendMarshalBinary encodes the sibling set to dst in compact binary format.
+func (ss SiblingSet) AppendMarshalBinary(dst []byte) ([]byte, error) {
+	if len(ss.Siblings) > math.MaxUint16 {
+		return nil, fmt.Errorf("storage: too many siblings to encode: %d", len(ss.Siblings))
+	}
+	dst = binary.BigEndian.AppendUint16(dst, uint16(len(ss.Siblings)))
+	for _, s := range ss.Siblings {
+		dst = appendUint32Prefixed(dst, s.Value)
+
+		vcOffset := len(dst)
+		dst = append(dst, 0, 0, 0, 0) // reserve 4 bytes for length prefix
+		var err error
+		dst, err = s.VClock.AppendMarshalBinary(dst)
+		if err != nil {
+			return nil, err
+		}
+		vcLen := uint32(len(dst) - (vcOffset + 4))
+		binary.BigEndian.PutUint32(dst[vcOffset:], vcLen)
+
+		dst = binary.BigEndian.AppendUint64(dst, uint64(s.Timestamp))
+		if s.Tombstone {
+			dst = append(dst, 1)
+		} else {
+			dst = append(dst, 0)
+		}
+		dst = binary.BigEndian.AppendUint64(dst, uint64(s.ExpiresAt))
+	}
+	return dst, nil
+}
+
+// MarshalBinary encodes the sibling set to a compact binary format.
 func (ss SiblingSet) MarshalBinary() ([]byte, error) {
 	if len(ss.Siblings) > math.MaxUint16 {
 		return nil, fmt.Errorf("storage: too many siblings to encode: %d", len(ss.Siblings))
 	}
-	buf := make([]byte, 2, 64*len(ss.Siblings)+2)
-	binary.BigEndian.PutUint16(buf, uint16(len(ss.Siblings)))
-	for _, s := range ss.Siblings {
-		vc, err := s.VClock.MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		buf = appendUint32Prefixed(buf, s.Value)
-		buf = appendUint32Prefixed(buf, vc)
-		buf = binary.BigEndian.AppendUint64(buf, uint64(s.Timestamp))
-		if s.Tombstone {
-			buf = append(buf, 1)
-		} else {
-			buf = append(buf, 0)
-		}
-		buf = binary.BigEndian.AppendUint64(buf, uint64(s.ExpiresAt))
-	}
-	return buf, nil
+	buf := make([]byte, 0, 64*len(ss.Siblings)+2)
+	return ss.AppendMarshalBinary(buf)
 }
 
-// UnmarshalBinary decodes a sibling set previously produced by
-// MarshalBinary. It never panics on truncated or malformed input, since it
-// must safely reject data from an untrusted peer or a torn disk write.
+// UnmarshalBinary decodes a sibling set previously produced by MarshalBinary.
 func (ss *SiblingSet) UnmarshalBinary(data []byte) error {
 	if len(data) < 2 {
 		return fmt.Errorf("%w: sibling set header truncated", quorumerr.ErrCorruptedData)
@@ -79,7 +86,12 @@ func (ss *SiblingSet) UnmarshalBinary(data []byte) error {
 	count := binary.BigEndian.Uint16(data)
 	data = data[2:]
 
-	siblings := make([]Sibling, 0, count)
+	if cap(ss.Siblings) >= int(count) {
+		ss.Siblings = ss.Siblings[:0]
+	} else {
+		ss.Siblings = make([]Sibling, 0, count)
+	}
+
 	for i := uint16(0); i < count; i++ {
 		var (
 			s   Sibling
@@ -89,9 +101,8 @@ func (ss *SiblingSet) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return err
 		}
-		siblings = append(siblings, s)
+		ss.Siblings = append(ss.Siblings, s)
 	}
-	ss.Siblings = siblings
 	return nil
 }
 
