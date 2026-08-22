@@ -36,17 +36,25 @@ type Client struct {
 	byFD  map[int]*clientConn
 }
 
-// NewClient creates a new pure transport Client.
-func NewClient(rt *ioruntime.Runtime, r *reactor.Reactor, handler ClientHandler) *Client {
+// NewClient creates a new pure transport Client with an optional shared byte pool.
+func NewClient(rt *ioruntime.Runtime, r *reactor.Reactor, bytePool *pool.BucketArrayPool[byte], handler ClientHandler) *Client {
+	if bytePool == nil {
+		bytePool = pool.NewDefaultArrayPool[byte]()
+	}
 	return &Client{
 		rt:       rt,
 		r:        r,
-		bytePool: pool.NewDefaultArrayPool[byte](),
+		bytePool: bytePool,
 		handler:  handler,
 		addrs:    make(map[node.NodeID]string),
 		conns:    make(map[node.NodeID]*clientConn),
 		byFD:     make(map[int]*clientConn),
 	}
+}
+
+// BytePool returns the byte buffer pool used by this Client.
+func (c *Client) BytePool() *pool.BucketArrayPool[byte] {
+	return c.bytePool
 }
 
 // SetHandler sets or updates the event hookback handler.

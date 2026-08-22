@@ -35,15 +35,23 @@ type Server struct {
 	conns    map[int]*serverConn
 }
 
-// NewServer creates a new io_uring transport Server.
-func NewServer(rt *ioruntime.Runtime, handler ServerHandler) *Server {
+// NewServer creates a new io_uring transport Server with an optional shared byte pool.
+func NewServer(rt *ioruntime.Runtime, bytePool *pool.BucketArrayPool[byte], handler ServerHandler) *Server {
+	if bytePool == nil {
+		bytePool = pool.NewDefaultArrayPool[byte]()
+	}
 	return &Server{
 		rt:       rt,
-		bytePool: pool.NewDefaultArrayPool[byte](),
+		bytePool: bytePool,
 		handler:  handler,
 		listenFD: -1,
 		conns:    make(map[int]*serverConn),
 	}
+}
+
+// BytePool returns the byte buffer pool used by this Server.
+func (s *Server) BytePool() *pool.BucketArrayPool[byte] {
+	return s.bytePool
 }
 
 // SetHandler sets or updates the server event hookback handler.

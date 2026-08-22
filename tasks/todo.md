@@ -332,5 +332,15 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 7. Implemented chunk-chained `pool.ByteArena` in `infra/pool/arena.go` and connected it to `Store.Scan` for zero-alloc result packing (`TestByteArena_MultiChunkOverflow_PointersRemainStable`).
 - [x] 8. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
 
+## Phase 14 — Zero-Allocation Network I/O & Shared Buffer Pool
 
+### What shipped, real and tested
+- [x] 1. Extracted wire protocol codecs from `infra/transport/iouring` to `contracts/wire/` (`status.go`, `rpc.go`, `rpc_test.go`).
+- [x] 2. Removed `FrameEncodedLen`, inlined framing calculations in `frame.go`, and moved test helpers to `frame_test.go`.
+- [x] 3. Separated zero-alloc sliding buffer `Reassembler` into `reassembler.go` and `reassembler_test.go`.
+- [x] 4. Embedded `Reassembler` by value in `tcpConn`, eliminating heap pointer allocations on socket connection.
+- [x] 5. Refactored `ClientHandler` and `TransportAdapter` with `SlotTable[pendingRPC]` demultiplexing.
+- [x] 6. Unified `BucketArrayPool[byte]` across `Client`, `Server`, and `TransportAdapter` so all network I/O shares a single buffer pool.
+- [x] 7. Updated `server/app/server.go` composition root to inject the shared byte pool.
+- [x] 8. Added `TestSharedBucketArrayPool_ClientServerAdapter` unit test and verified all tests/vet clean across all 39 packages.
 

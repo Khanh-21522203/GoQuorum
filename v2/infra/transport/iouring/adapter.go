@@ -64,16 +64,26 @@ var _ transport.Transport = (*TransportAdapter)(nil)
 var _ ClientHandler = (*TransportAdapter)(nil)
 
 // NewTransportAdapter creates a new TransportAdapter wrapping client.
+// It shares the client's byte buffer pool for zero-allocation encoding.
 func NewTransportAdapter(client *Client, r *reactor.Reactor) *TransportAdapter {
+	bp := client.BytePool()
+	if bp == nil {
+		bp = pool.NewDefaultArrayPool[byte]()
+	}
 	a := &TransportAdapter{
 		client:         client,
 		r:              r,
-		bytePool:       pool.NewDefaultArrayPool[byte](),
+		bytePool:       bp,
 		slots:          pool.NewSlotTable[pendingRPC](1024),
 		requestTimeout: defaultRequestTimeout,
 	}
 	client.handler = a
 	return a
+}
+
+// BytePool returns the byte buffer pool used by this TransportAdapter.
+func (a *TransportAdapter) BytePool() *pool.BucketArrayPool[byte] {
+	return a.bytePool
 }
 
 // Dial establishes an outbound TCP connection to peer id at addr.

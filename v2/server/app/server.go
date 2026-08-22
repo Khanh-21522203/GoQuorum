@@ -20,6 +20,7 @@ import (
 	"goquorum.io/v2/infra/affinity"
 	"goquorum.io/v2/infra/config"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/pool"
 	"goquorum.io/v2/infra/storage/journal"
 	"goquorum.io/v2/infra/transport/iouring"
 	"goquorum.io/v2/server/api"
@@ -124,7 +125,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// 5. Transport port (infra/transport/iouring implements engine/transport.Transport).
-	tc := iouring.NewClient(rt, r, nil)
+	bytePool := pool.NewDefaultArrayPool[byte]()
+	tc := iouring.NewClient(rt, r, bytePool, nil)
 	adapter := iouring.NewTransportAdapter(tc, r)
 	for _, m := range cfg.Cluster.Members {
 		if m.ID == cfg.Node.NodeID {
@@ -134,7 +136,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	sHandler := &appServerHandler{}
-	ts := iouring.NewServer(rt, sHandler)
+	ts := iouring.NewServer(rt, bytePool, sHandler)
 	sHandler.server = ts
 
 	if err := ts.Listen(localHTTPAddr); err != nil {

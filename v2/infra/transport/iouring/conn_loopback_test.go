@@ -14,6 +14,7 @@ import (
 	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/pool"
 )
 
 // fakeHandler is a RequestHandler test double.
@@ -136,7 +137,7 @@ func newTestCluster(t *testing.T, handler *fakeHandler) *testCluster {
 
 	serverEnd := newTestEnd(t)
 	serverHandler := &testServerHandler{fake: handler}
-	server := NewServer(serverEnd.rt, serverHandler)
+	server := NewServer(serverEnd.rt, nil, serverHandler)
 	serverHandler.server = server
 
 	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
@@ -149,7 +150,7 @@ func newTestCluster(t *testing.T, handler *fakeHandler) *testCluster {
 	}
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil)
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
 	adapter := NewTransportAdapter(client, clientEnd.r)
 
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
@@ -213,7 +214,7 @@ func TestServerClient_Heartbeat(t *testing.T) {
 		deadAddr := reserveDeadAddr(t)
 
 		clientEnd := newTestEnd(t)
-		client := NewClient(clientEnd.rt, clientEnd.r, nil)
+		client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
 		adapter := NewTransportAdapter(client, clientEnd.r)
 		clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 		clientEnd.run(t)
@@ -245,7 +246,7 @@ func TestServerClient_Heartbeat(t *testing.T) {
 		}()
 
 		clientEnd := newTestEnd(t)
-		client := NewClient(clientEnd.rt, clientEnd.r, nil)
+		client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
 		adapter := NewTransportAdapter(client, clientEnd.r)
 		adapter.requestTimeout = 300 * time.Millisecond
 		clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
@@ -292,7 +293,7 @@ func TestServerClient_LifecycleHooks(t *testing.T) {
 			serverConnectErr <- err
 		},
 	}
-	server := NewServer(serverEnd.rt, sHandler)
+	server := NewServer(serverEnd.rt, nil, sHandler)
 	sHandler.server = server
 
 	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
@@ -305,7 +306,7 @@ func TestServerClient_LifecycleHooks(t *testing.T) {
 	})
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil)
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
 	adapter := NewTransportAdapter(client, clientEnd.r)
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 	clientEnd.run(t)
@@ -418,7 +419,7 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 			acceptedFD = connFD
 		},
 	}
-	server := NewServer(serverEnd.rt, sHandler)
+	server := NewServer(serverEnd.rt, nil, sHandler)
 	sHandler.server = server
 
 	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
@@ -431,7 +432,7 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 	})
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil)
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
 	adapter := NewTransportAdapter(client, clientEnd.r)
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 	clientEnd.run(t)
@@ -466,6 +467,65 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("client.OnMessage did not fire for server push")
+	}
+
+	call(t, clientEnd, func() { _ = adapter.Close() })
+	call(t, serverEnd, func() { _ = server.Close() })
+}
+
+func TestSharedBucketArrayPool_ClientServerAdapter(t *testing.T) {
+	sharedPool := pool.NewDefaultArrayPool[byte]()
+
+	serverEnd := newTestEnd(t)
+	sHandler := &testServerHandler{}
+	server := NewServer(serverEnd.rt, sharedPool, sHandler)
+	sHandler.server = server
+
+	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
+	serverEnd.run(t)
+
+	call(t, serverEnd, func() {
+		if err := server.Listen("127.0.0.1:0"); err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+	})
+
+	clientEnd := newTestEnd(t)
+	client := NewClient(clientEnd.rt, clientEnd.r, sharedPool, nil)
+	adapter := NewTransportAdapter(client, clientEnd.r)
+
+	if client.BytePool() != sharedPool {
+		t.Fatalf("client.BytePool() != sharedPool")
+	}
+	if server.BytePool() != sharedPool {
+		t.Fatalf("server.BytePool() != sharedPool")
+	}
+	if adapter.BytePool() != sharedPool {
+		t.Fatalf("adapter.BytePool() != sharedPool")
+	}
+
+	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
+	clientEnd.run(t)
+
+	const peerID node.NodeID = "peer-shared-pool"
+	call(t, clientEnd, func() {
+		if err := adapter.Dial(peerID, server.Addr()); err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+	})
+
+	hbDone := make(chan error, 1)
+	clientEnd.r.PostFunc(func() {
+		adapter.Heartbeat(peerID, func(err error) { hbDone <- err })
+	})
+
+	select {
+	case err := <-hbDone:
+		if err != nil {
+			t.Fatalf("Heartbeat failed with shared pool: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Heartbeat timed out with shared pool")
 	}
 
 	call(t, clientEnd, func() { _ = adapter.Close() })
