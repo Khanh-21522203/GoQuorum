@@ -2,21 +2,12 @@ package transport
 
 import (
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/storage"
 )
 
-// GossipEntry is one node's gossiped membership state, mirrored here (the
-// same workaround engine/readrepair.ReplicaRead uses) so this port can
-// expose a gossip exchange without engine/transport importing
-// engine/gossip, which would create a cycle back through engine/gossip's
-// own dependency on this package.
-type GossipEntry struct {
-	NodeID    node.NodeID
-	Addr      string
-	Status    uint8
-	Version   uint64
-	UpdatedAt int64 // Unix timestamp (seconds).
-}
+// GossipEntry is one node's gossiped membership state transferred over the wire.
+type GossipEntry = wire.GossipEntry
 
 // Transport is the [PORT] implemented by infra/transport. It carries all
 // node-to-node communication engine needs: replicated writes/reads,

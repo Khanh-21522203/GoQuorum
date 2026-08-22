@@ -8,20 +8,18 @@ import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 )
 
-func sampleSiblingSet() *storage.SiblingSet {
+func sampleSiblingSet() *SiblingSet {
 	vc := vclock.NewVectorClock()
 	vc.Set("node-a", 3)
-	return &storage.SiblingSet{Siblings: []storage.Sibling{
+	return &SiblingSet{Siblings: []StorageSibling{
 		{Value: []byte("hello"), VClock: vc, Timestamp: 100, Tombstone: false, ExpiresAt: 0},
 	}}
 }
 
-func sampleGossipEntries() []transport.GossipEntry {
-	return []transport.GossipEntry{
+func sampleGossipEntries() []GossipEntry {
+	return []GossipEntry{
 		{NodeID: node.NodeID("node-a"), Addr: "10.0.0.1:9000", Status: 1, Version: 7, UpdatedAt: 1000},
 		{NodeID: node.NodeID("node-b"), Addr: "10.0.0.2:9000", Status: 2, Version: 8, UpdatedAt: 2000},
 	}
@@ -30,7 +28,10 @@ func sampleGossipEntries() []transport.GossipEntry {
 // --- RemotePut ---------------------------------------------------------------
 
 func TestRemotePutRequest_RoundTrip(t *testing.T) {
-	req := RemotePutRequest{Key: []byte("some-key"), Siblings: sampleSiblingSet()}
+	req := RemotePutRequest{
+		Key:      []byte("my-key"),
+		Siblings: sampleSiblingSet(),
+	}
 	data, err := req.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -48,7 +49,7 @@ func TestRemotePutRequest_RoundTrip(t *testing.T) {
 }
 
 func TestRemotePutRequest_RoundTrip_EmptyKeyAndSiblings(t *testing.T) {
-	req := RemotePutRequest{Key: []byte{}, Siblings: &storage.SiblingSet{}}
+	req := RemotePutRequest{Key: []byte{}, Siblings: &SiblingSet{}}
 	data, err := req.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)

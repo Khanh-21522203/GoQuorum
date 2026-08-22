@@ -4,29 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"net"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
 )
-
-// fakeHandler is a RequestHandler test double.
-type fakeHandler struct {
-	calls atomic.Int64
-	err   error
-}
-
-func (h *fakeHandler) Heartbeat() error {
-	h.calls.Add(1)
-	return h.err
-}
 
 // testEnd bundles a real ioruntime.Runtime with a real reactor.Reactor.
 type testEnd struct {
@@ -79,25 +66,19 @@ func call(t *testing.T, te *testEnd, fn func()) {
 
 type testServerHandler struct {
 	server      *Server
-	fake        *fakeHandler
+	onMessage   func(connFD int, hdr FrameHeader, body []byte)
 	onConnected func(connFD int, remoteAddr string)
 	onDisconn   func(connFD int, err error)
 	onConnErr   func(err error)
 }
 
 func (h *testServerHandler) OnMessage(connFD int, hdr FrameHeader, body []byte) {
-	switch wire.MessageID(hdr.MessageID) {
-	case wire.MsgHeartbeatRequest:
-		var req wire.HeartbeatRequest
-		_ = req.Unmarshal(body)
-		var err error
-		if h.fake != nil {
-			err = h.fake.Heartbeat()
-		}
-		resp := wire.HeartbeatResponse{Status: wire.StatusCodeFromError(err)}
-		respBody, _ := resp.Marshal()
-		_ = h.server.Send(connFD, uint16(wire.MsgHeartbeatResponse), hdr.CorrelationID, respBody)
+	if h.onMessage != nil {
+		h.onMessage(connFD, hdr, body)
+		return
 	}
+	// Default echo reply
+	_ = h.server.Send(connFD, hdr.MessageID+1, hdr.CorrelationID, body)
 }
 
 func (h *testServerHandler) OnConnected(connFD int, remoteAddr string) {
@@ -118,27 +99,42 @@ func (h *testServerHandler) OnConnectError(err error) {
 	}
 }
 
-// testCluster provides an end-to-end loopback fixture with Server, Client, and TransportAdapter.
-type testCluster struct {
-	serverEnd *testEnd
-	clientEnd *testEnd
-	server    *Server
-	client    *Client
-	adapter   *TransportAdapter
-	handler   *fakeHandler
-	peerID    node.NodeID
+type testClientHandler struct {
+	onFrame      func(id node.NodeID, hdr FrameHeader, body []byte)
+	onConnected  func(id node.NodeID, addr string)
+	onDisconn    func(id node.NodeID, err error)
+	onConnectErr func(id node.NodeID, err error)
 }
 
-func newTestCluster(t *testing.T, handler *fakeHandler) *testCluster {
-	t.Helper()
-	if handler == nil {
-		handler = &fakeHandler{}
+func (h *testClientHandler) OnFrame(id node.NodeID, hdr FrameHeader, body []byte) {
+	if h.onFrame != nil {
+		h.onFrame(id, hdr, body)
 	}
+}
 
+func (h *testClientHandler) OnConnected(id node.NodeID, addr string) {
+	if h.onConnected != nil {
+		h.onConnected(id, addr)
+	}
+}
+
+func (h *testClientHandler) OnDisconnected(id node.NodeID, err error) {
+	if h.onDisconn != nil {
+		h.onDisconn(id, err)
+	}
+}
+
+func (h *testClientHandler) OnConnectError(id node.NodeID, err error) {
+	if h.onConnectErr != nil {
+		h.onConnectErr(id, err)
+	}
+}
+
+func TestServerClient_FrameExchange(t *testing.T) {
 	serverEnd := newTestEnd(t)
-	serverHandler := &testServerHandler{fake: handler}
-	server := NewServer(serverEnd.rt, nil, serverHandler)
-	serverHandler.server = server
+	sHandler := &testServerHandler{}
+	server := NewServer(serverEnd.rt, nil, sHandler)
+	sHandler.server = server
 
 	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
 	serverEnd.run(t)
@@ -150,130 +146,43 @@ func newTestCluster(t *testing.T, handler *fakeHandler) *testCluster {
 	}
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
-	adapter := NewTransportAdapter(client, clientEnd.r)
-
+	frameCh := make(chan []byte, 1)
+	cHandler := &testClientHandler{
+		onFrame: func(id node.NodeID, hdr FrameHeader, body []byte) {
+			if hdr.CorrelationID == 42 && hdr.MessageID == uint16(wire.MsgHeartbeatResponse) {
+				frameCh <- body
+			}
+		},
+	}
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, cHandler)
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 	clientEnd.run(t)
 
-	const peerID node.NodeID = "peer-cluster"
-	var dialErr error
-	call(t, clientEnd, func() { dialErr = adapter.Dial(peerID, server.Addr()) })
-	if dialErr != nil {
-		t.Fatalf("Dial: %v", dialErr)
-	}
-
-	return &testCluster{
-		serverEnd: serverEnd,
-		clientEnd: clientEnd,
-		server:    server,
-		client:    client,
-		adapter:   adapter,
-		handler:   handler,
-		peerID:    peerID,
-	}
-}
-
-func (c *testCluster) sendHeartbeat(t *testing.T) error {
-	t.Helper()
-	done := make(chan error, 1)
-	c.clientEnd.r.PostFunc(func() {
-		c.adapter.Heartbeat(c.peerID, func(err error) { done <- err })
+	const peerID node.NodeID = "peer-1"
+	call(t, clientEnd, func() {
+		if err := client.Dial(peerID, server.Addr()); err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
 	})
+
+	sendPayload := []byte("hello-iouring")
+	call(t, clientEnd, func() {
+		if err := client.Request(peerID, uint16(wire.MsgHeartbeatRequest), 42, sendPayload); err != nil {
+			t.Fatalf("client.Request: %v", err)
+		}
+	})
+
 	select {
-	case err := <-done:
-		return err
-	case <-time.After(5 * time.Second):
-		t.Fatal("Heartbeat timed out waiting for reply")
-		return nil
+	case body := <-frameCh:
+		if !bytes.Equal(body, sendPayload) {
+			t.Fatalf("got body %q, want %q", body, sendPayload)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for reply frame")
 	}
-}
 
-func TestServerClient_Heartbeat(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
-		tc := newTestCluster(t, nil)
-		if err := tc.sendHeartbeat(t); err != nil {
-			t.Fatalf("Heartbeat failed: %v", err)
-		}
-		if got := tc.handler.calls.Load(); got != 1 {
-			t.Fatalf("handler.Heartbeat called %d times, want 1", got)
-		}
-		call(t, tc.clientEnd, func() { _ = tc.adapter.Close() })
-	})
-
-	t.Run("HandlerError", func(t *testing.T) {
-		tc := newTestCluster(t, &fakeHandler{err: quorumerr.ErrStorageClosed})
-		err := tc.sendHeartbeat(t)
-		if !errors.Is(err, quorumerr.ErrStorageClosed) {
-			t.Fatalf("Heartbeat error = %v, want %v", err, quorumerr.ErrStorageClosed)
-		}
-		call(t, tc.clientEnd, func() { _ = tc.adapter.Close() })
-	})
-
-	t.Run("ConnectionRefused", func(t *testing.T) {
-		deadAddr := reserveDeadAddr(t)
-
-		clientEnd := newTestEnd(t)
-		client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
-		adapter := NewTransportAdapter(client, clientEnd.r)
-		clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
-		clientEnd.run(t)
-
-		dialDone := make(chan error, 1)
-		clientEnd.r.PostFunc(func() { dialDone <- adapter.Dial("peer-refused", deadAddr) })
-		select {
-		case err := <-dialDone:
-			if err == nil {
-				t.Fatal("Dial to dead address unexpectedly succeeded")
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("Dial did not return promptly for refused connection")
-		}
-	})
-
-	t.Run("Timeout", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("net.Listen: %v", err)
-		}
-		defer ln.Close()
-
-		go func() {
-			conn, err := ln.Accept()
-			if err == nil {
-				t.Cleanup(func() { _ = conn.Close() })
-			}
-		}()
-
-		clientEnd := newTestEnd(t)
-		client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
-		adapter := NewTransportAdapter(client, clientEnd.r)
-		adapter.requestTimeout = 300 * time.Millisecond
-		clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
-		clientEnd.run(t)
-
-		const peerID node.NodeID = "peer-timeout"
-		var dialErr error
-		call(t, clientEnd, func() { dialErr = adapter.Dial(peerID, ln.Addr().String()) })
-		if dialErr != nil {
-			t.Fatalf("Dial: %v", dialErr)
-		}
-
-		hbDone := make(chan error, 1)
-		clientEnd.r.PostFunc(func() {
-			adapter.Heartbeat(peerID, func(err error) { hbDone <- err })
-		})
-		select {
-		case err := <-hbDone:
-			if err == nil {
-				t.Fatal("Heartbeat unexpectedly succeeded against non-responsive peer")
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("Heartbeat did not time out; it hung")
-		}
-
-		call(t, clientEnd, func() { _ = adapter.Close() })
-	})
+	call(t, clientEnd, func() { _ = client.Close() })
+	call(t, serverEnd, func() { _ = server.Close() })
 }
 
 func TestServerClient_LifecycleHooks(t *testing.T) {
@@ -306,74 +215,63 @@ func TestServerClient_LifecycleHooks(t *testing.T) {
 	})
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
-	adapter := NewTransportAdapter(client, clientEnd.r)
-	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
-	clientEnd.run(t)
-
 	clientConnected := make(chan node.NodeID, 1)
 	clientDisconnected := make(chan node.NodeID, 1)
 	clientConnectError := make(chan node.NodeID, 1)
 
-	adapter.OnConnectedHook = func(id node.NodeID, addr string) {
-		clientConnected <- id
+	cHandler := &testClientHandler{
+		onConnected: func(id node.NodeID, addr string) {
+			clientConnected <- id
+		},
+		onDisconn: func(id node.NodeID, err error) {
+			clientDisconnected <- id
+		},
+		onConnectErr: func(id node.NodeID, err error) {
+			clientConnectError <- id
+		},
 	}
-	adapter.OnDisconnectedHook = func(id node.NodeID, err error) {
-		clientDisconnected <- id
-	}
-	adapter.OnConnectErrorHook = func(id node.NodeID, err error) {
-		clientConnectError <- id
-	}
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, cHandler)
+	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
+	clientEnd.run(t)
 
 	const peerID node.NodeID = "node-b"
-	var dialErr error
-	call(t, clientEnd, func() { dialErr = adapter.Dial(peerID, server.Addr()) })
-	if dialErr != nil {
-		t.Fatalf("Dial: %v", dialErr)
+	call(t, clientEnd, func() {
+		if err := client.Dial(peerID, server.Addr()); err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+	})
+
+	select {
+	case addr := <-serverConnected:
+		if addr == "" {
+			t.Fatal("server OnConnected got empty address")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server OnConnected did not fire")
 	}
 
 	select {
 	case id := <-clientConnected:
 		if id != peerID {
-			t.Fatalf("OnConnected got %q, want %q", id, peerID)
+			t.Fatalf("client OnConnected got %q, want %q", id, peerID)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("OnConnected did not fire")
+		t.Fatal("client OnConnected did not fire")
 	}
 
-	select {
-	case <-serverConnected:
-	case <-time.After(3 * time.Second):
-		t.Fatal("OnConnected did not fire")
-	}
-
-	// Send a heartbeat roundtrip
-	hbDone := make(chan error, 1)
-	clientEnd.r.PostFunc(func() {
-		adapter.Heartbeat(peerID, func(err error) { hbDone <- err })
-	})
-	select {
-	case err := <-hbDone:
-		if err != nil {
-			t.Fatalf("Heartbeat: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Heartbeat did not complete")
-	}
-
-	// Close client side to trigger client disconnect hook
-	call(t, clientEnd, func() { _ = adapter.Close() })
+	// Close client side to trigger disconnect hooks
+	call(t, clientEnd, func() { _ = client.Close() })
 
 	select {
 	case id := <-clientDisconnected:
 		if id != peerID {
-			t.Fatalf("OnDisconnected got %q, want %q", id, peerID)
+			t.Fatalf("client OnDisconnected got %q, want %q", id, peerID)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("OnDisconnected did not fire")
+		t.Fatal("client OnDisconnected did not fire")
 	}
 
-	// Test server.OnConnectError
+	// Test server.OnConnectError (white-box completion test on listenFD)
 	call(t, serverEnd, func() {
 		server.HandleCompletion(reactor.Event{
 			UserData: makeUserData(server.listenFD, 0),
@@ -389,25 +287,25 @@ func TestServerClient_LifecycleHooks(t *testing.T) {
 		t.Fatal("server OnConnectError did not fire")
 	}
 
-	// Close server side to trigger server disconnect hook
+	// Close server side
 	call(t, serverEnd, func() { _ = server.Close() })
 
 	select {
 	case <-serverDisconnected:
 	case <-time.After(3 * time.Second):
-		t.Fatal("OnDisconnected did not fire")
+		t.Fatal("server OnDisconnected did not fire")
 	}
 
 	// Test client.OnConnectError
 	deadAddr := reserveDeadAddr(t)
-	call(t, clientEnd, func() { _ = adapter.Dial("dead-node", deadAddr) })
+	call(t, clientEnd, func() { _ = client.Dial("dead-node", deadAddr) })
 	select {
 	case id := <-clientConnectError:
 		if id != "dead-node" {
-			t.Fatalf("OnConnectError got %q, want dead-node", id)
+			t.Fatalf("client OnConnectError got %q, want dead-node", id)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("OnConnectError did not fire")
+		t.Fatal("client OnConnectError did not fire")
 	}
 }
 
@@ -432,21 +330,21 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 	})
 
 	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, nil, nil)
-	adapter := NewTransportAdapter(client, clientEnd.r)
+	clientReceivedMessage := make(chan []byte, 1)
+	cHandler := &testClientHandler{
+		onFrame: func(id node.NodeID, hdr FrameHeader, body []byte) {
+			if wire.MessageID(hdr.MessageID) == wire.MsgGossipExchangeRequest {
+				clientReceivedMessage <- body
+			}
+		},
+	}
+	client := NewClient(clientEnd.rt, clientEnd.r, nil, cHandler)
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 	clientEnd.run(t)
 
-	clientReceivedMessage := make(chan []byte, 1)
-	adapter.OnMessageHook = func(id node.NodeID, hdr FrameHeader, body []byte) {
-		if wire.MessageID(hdr.MessageID) == wire.MsgGossipExchangeRequest {
-			clientReceivedMessage <- body
-		}
-	}
-
 	const peerID node.NodeID = "peer-push"
 	call(t, clientEnd, func() {
-		if err := adapter.Dial(peerID, server.Addr()); err != nil {
+		if err := client.Dial(peerID, server.Addr()); err != nil {
 			t.Fatalf("Dial: %v", err)
 		}
 	})
@@ -463,17 +361,17 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 	select {
 	case body := <-clientReceivedMessage:
 		if !bytes.Equal(body, pushPayload) {
-			t.Fatalf("client.OnMessage got %q, want %q", body, pushPayload)
+			t.Fatalf("client received got %q, want %q", body, pushPayload)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("client.OnMessage did not fire for server push")
+		t.Fatal("client did not receive server push")
 	}
 
-	call(t, clientEnd, func() { _ = adapter.Close() })
+	call(t, clientEnd, func() { _ = client.Close() })
 	call(t, serverEnd, func() { _ = server.Close() })
 }
 
-func TestSharedBucketArrayPool_ClientServerAdapter(t *testing.T) {
+func TestSharedBucketArrayPool_ClientServer(t *testing.T) {
 	sharedPool := pool.NewDefaultArrayPool[byte]()
 
 	serverEnd := newTestEnd(t)
@@ -492,7 +390,6 @@ func TestSharedBucketArrayPool_ClientServerAdapter(t *testing.T) {
 
 	clientEnd := newTestEnd(t)
 	client := NewClient(clientEnd.rt, clientEnd.r, sharedPool, nil)
-	adapter := NewTransportAdapter(client, clientEnd.r)
 
 	if client.BytePool() != sharedPool {
 		t.Fatalf("client.BytePool() != sharedPool")
@@ -500,54 +397,28 @@ func TestSharedBucketArrayPool_ClientServerAdapter(t *testing.T) {
 	if server.BytePool() != sharedPool {
 		t.Fatalf("server.BytePool() != sharedPool")
 	}
-	if adapter.BytePool() != sharedPool {
-		t.Fatalf("adapter.BytePool() != sharedPool")
-	}
 
 	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
 	clientEnd.run(t)
 
 	const peerID node.NodeID = "peer-shared-pool"
 	call(t, clientEnd, func() {
-		if err := adapter.Dial(peerID, server.Addr()); err != nil {
+		if err := client.Dial(peerID, server.Addr()); err != nil {
 			t.Fatalf("Dial: %v", err)
 		}
 	})
 
-	hbDone := make(chan error, 1)
-	clientEnd.r.PostFunc(func() {
-		adapter.Heartbeat(peerID, func(err error) { hbDone <- err })
-	})
-
-	select {
-	case err := <-hbDone:
-		if err != nil {
-			t.Fatalf("Heartbeat failed with shared pool: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Heartbeat timed out with shared pool")
-	}
-
-	call(t, clientEnd, func() { _ = adapter.Close() })
+	call(t, clientEnd, func() { _ = client.Close() })
 	call(t, serverEnd, func() { _ = server.Close() })
 }
 
 func reserveDeadAddr(t *testing.T) string {
 	t.Helper()
-	fd, err := listenTCP("127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listenTCP: %v", err)
+		t.Fatalf("net.Listen: %v", err)
 	}
-	sa, err := syscall.Getsockname(fd)
-	if err != nil {
-		t.Fatalf("Getsockname: %v", err)
-	}
-	addr, err := sockaddrToString(sa)
-	if err != nil {
-		t.Fatalf("sockaddrToString: %v", err)
-	}
-	if err := syscall.Close(fd); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
 	return addr
 }

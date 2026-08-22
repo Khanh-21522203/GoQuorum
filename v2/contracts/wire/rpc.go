@@ -8,8 +8,6 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 )
 
 // MessageID identifies the kind of RPC body a frame carries.
@@ -80,7 +78,7 @@ func decodeUint32Prefixed(data []byte) (value, rest []byte, err error) {
 	return data[:n], data[n:], nil
 }
 
-func appendSiblingSet(dst []byte, ss *storage.SiblingSet) ([]byte, error) {
+func appendSiblingSet(dst []byte, ss *SiblingSet) ([]byte, error) {
 	vcOffset := len(dst)
 	dst = append(dst, 0, 0, 0, 0)
 	var err error
@@ -96,13 +94,13 @@ func appendSiblingSet(dst []byte, ss *storage.SiblingSet) ([]byte, error) {
 // RemotePutRequest carries a key and its full SiblingSet across the wire.
 type RemotePutRequest struct {
 	Key      []byte
-	Siblings *storage.SiblingSet
+	Siblings *SiblingSet
 }
 
 func (r RemotePutRequest) AppendMarshalBinary(dst []byte) ([]byte, error) {
 	dst = appendUint32Prefixed(dst, r.Key)
 	if r.Siblings == nil {
-		var emptySib storage.SiblingSet
+		var emptySib SiblingSet
 		return appendSiblingSet(dst, &emptySib)
 	}
 	return appendSiblingSet(dst, r.Siblings)
@@ -124,7 +122,7 @@ func (r *RemotePutRequest) Unmarshal(data []byte) error {
 	}
 	r.Key = key
 	if r.Siblings == nil {
-		r.Siblings = &storage.SiblingSet{}
+		r.Siblings = &SiblingSet{}
 	}
 	return r.Siblings.UnmarshalBinary(sibBytes)
 }
@@ -175,7 +173,7 @@ func (r *RemoteGetRequest) Unmarshal(data []byte) error {
 // RemoteGetResponse carries the status code and optional SiblingSet for a RemoteGet.
 type RemoteGetResponse struct {
 	Status   StatusCode
-	Siblings *storage.SiblingSet
+	Siblings *SiblingSet
 }
 
 func (r RemoteGetResponse) AppendMarshalBinary(dst []byte) ([]byte, error) {
@@ -184,7 +182,7 @@ func (r RemoteGetResponse) AppendMarshalBinary(dst []byte) ([]byte, error) {
 		return dst, nil
 	}
 	if r.Siblings == nil {
-		var emptySib storage.SiblingSet
+		var emptySib SiblingSet
 		return appendSiblingSet(dst, &emptySib)
 	}
 	return appendSiblingSet(dst, r.Siblings)
@@ -200,9 +198,11 @@ func (r *RemoteGetResponse) Unmarshal(data []byte) error {
 		return fmt.Errorf("%w: RemoteGetResponse body truncated", quorumerr.ErrCorruptedData)
 	}
 	r.Status = StatusCode(binary.BigEndian.Uint16(data))
-	data = data[2:]
 	if r.Status != StatusOK {
-		r.Siblings = nil
+		return nil
+	}
+	data = data[2:]
+	if len(data) == 0 {
 		return nil
 	}
 
@@ -211,7 +211,7 @@ func (r *RemoteGetResponse) Unmarshal(data []byte) error {
 		return fmt.Errorf("%w: decoding sibling bytes: %v", quorumerr.ErrCorruptedData, err)
 	}
 	if r.Siblings == nil {
-		r.Siblings = &storage.SiblingSet{}
+		r.Siblings = &SiblingSet{}
 	}
 	return r.Siblings.UnmarshalBinary(sibBytes)
 }
@@ -335,7 +335,7 @@ func (r *NotifyLeavingResponse) Unmarshal(data []byte) error {
 
 // GossipExchangeRequest carries a slice of GossipEntry.
 type GossipExchangeRequest struct {
-	Entries []transport.GossipEntry
+	Entries []GossipEntry
 }
 
 func (r GossipExchangeRequest) AppendMarshalBinary(dst []byte) ([]byte, error) {
@@ -358,7 +358,7 @@ func (r *GossipExchangeRequest) Unmarshal(data []byte) error {
 
 // GossipExchangeResponse carries a slice of GossipEntry.
 type GossipExchangeResponse struct {
-	Entries []transport.GossipEntry
+	Entries []GossipEntry
 }
 
 func (r GossipExchangeResponse) AppendMarshalBinary(dst []byte) ([]byte, error) {
@@ -379,7 +379,7 @@ func (r *GossipExchangeResponse) Unmarshal(data []byte) error {
 	return nil
 }
 
-func appendGossipEntries(dst []byte, entries []transport.GossipEntry) ([]byte, error) {
+func appendGossipEntries(dst []byte, entries []GossipEntry) ([]byte, error) {
 	if len(entries) > math.MaxUint16 {
 		return nil, fmt.Errorf("wire: too many gossip entries to encode: %d", len(entries))
 	}
@@ -394,32 +394,31 @@ func appendGossipEntries(dst []byte, entries []transport.GossipEntry) ([]byte, e
 	return dst, nil
 }
 
-func decodeGossipEntries(data []byte, reuse []transport.GossipEntry) ([]transport.GossipEntry, error) {
+func decodeGossipEntries(data []byte, reuse []GossipEntry) ([]GossipEntry, error) {
 	if len(data) < 2 {
 		return nil, fmt.Errorf("%w: gossip entries header truncated", quorumerr.ErrCorruptedData)
 	}
 	count := int(binary.BigEndian.Uint16(data))
 	data = data[2:]
 
-	var entries []transport.GossipEntry
+	var entries []GossipEntry
 	if cap(reuse) >= count {
 		entries = reuse[:0]
 	} else {
-		entries = make([]transport.GossipEntry, 0, count)
+		entries = make([]GossipEntry, 0, count)
 	}
 
 	for i := 0; i < count; i++ {
 		idBytes, rest, err := decodeUint32Prefixed(data)
 		if err != nil {
-			return nil, fmt.Errorf("%w: decoding node ID: %v", quorumerr.ErrCorruptedData, err)
+			return nil, fmt.Errorf("%w: decoding gossip nodeID: %v", quorumerr.ErrCorruptedData, err)
 		}
 		addrBytes, rest, err := decodeUint32Prefixed(rest)
 		if err != nil {
-			return nil, fmt.Errorf("%w: decoding addr: %v", quorumerr.ErrCorruptedData, err)
+			return nil, fmt.Errorf("%w: decoding gossip addr: %v", quorumerr.ErrCorruptedData, err)
 		}
-		const trailerLen = 1 + 8 + 8
-		if len(rest) < trailerLen {
-			return nil, fmt.Errorf("%w: gossip entry trailer truncated", quorumerr.ErrCorruptedData)
+		if len(rest) < 1+8+8 {
+			return nil, fmt.Errorf("%w: decoding gossip payload truncated", quorumerr.ErrCorruptedData)
 		}
 		status := rest[0]
 		version := binary.BigEndian.Uint64(rest[1:9])
@@ -435,7 +434,7 @@ func decodeGossipEntries(data []byte, reuse []transport.GossipEntry) ([]transpor
 			addr = unsafe.String(unsafe.SliceData(addrBytes), len(addrBytes))
 		}
 
-		entries = append(entries, transport.GossipEntry{
+		entries = append(entries, GossipEntry{
 			NodeID:    nodeID,
 			Addr:      addr,
 			Status:    status,

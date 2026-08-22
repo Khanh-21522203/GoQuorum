@@ -124,10 +124,10 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("node %s not found in cfg.Cluster.Members (needed to know its own internal-RPC listen address)", cfg.Node.NodeID)
 	}
 
-	// 5. Transport port (infra/transport/iouring implements engine/transport.Transport).
+	// 5. Transport port (engine/transport.Adapter wraps iouring.Client).
 	bytePool := pool.NewDefaultArrayPool[byte]()
 	tc := iouring.NewClient(rt, r, bytePool, nil)
-	adapter := iouring.NewTransportAdapter(tc, r)
+	adapter := enginetransport.NewAdapter(tc, r)
 	for _, m := range cfg.Cluster.Members {
 		if m.ID == cfg.Node.NodeID {
 			continue

@@ -344,3 +344,15 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 7. Updated `server/app/server.go` composition root to inject the shared byte pool.
 - [x] 8. Added `TestSharedBucketArrayPool_ClientServerAdapter` unit test and verified all tests/vet clean across all 39 packages.
 
+## Phase 15 — Move Adapter to Engine Layer & Lower-Level Contract Alignment
+
+### What shipped, real and tested
+- [x] 1. `infra/transport/iouring` owns low-level I/O contracts and engines (`Client`, `Server`, `ClientHandler`, `ServerHandler`, `FrameHeader`).
+- [x] 2. `engine/transport.Adapter` lives in `engine/transport/adapter.go`, wrapping `*iouring.Client` and implementing `iouring.ClientHandler` and `transport.Transport`.
+- [x] 3. `engine/transport.Adapter` owns higher-level domain coordination: RPC correlation slots, request timeout timers, and wire codec marshaling.
+- [x] 4. Removed `infra/transport/iouring/adapter.go`.
+- [x] 5. Extracted `SiblingSet` (`siblings.go`) and `GossipEntry` (`gossip.go`) to `contracts/wire`, ensuring `contracts` has 0 dependencies on `engine`.
+- [x] 6. Added comprehensive unit tests in `engine/transport/adapter_test.go`.
+- [x] 7. Updated `server/app/server.go` and `conn_loopback_test.go` to use `enginetransport.NewAdapter`.
+- [x] 8. Verified all tests and `go vet` clean across all 39 packages.
+
