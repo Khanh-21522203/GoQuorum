@@ -32,6 +32,49 @@ func TestEncodeDecodeRecord_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncodeRecordTo_And_DecodeRecord_ZeroAllocs(t *testing.T) {
+	key := []byte("account:user-12345")
+	val := []byte(`{"balance":1000,"status":"active"}`)
+
+	dst := make([]byte, 256)
+
+	// Verify EncodeRecordTo is 0 allocs
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = EncodeRecordTo(dst, key, val)
+	})
+	if allocs != 0 {
+		t.Fatalf("EncodeRecordTo allocated %f objects, want 0", allocs)
+	}
+
+	encoded, err := EncodeRecordTo(dst, key, val)
+	if err != nil {
+		t.Fatalf("EncodeRecordTo: %v", err)
+	}
+
+	// Verify DecodeRecord is 0 allocs
+	allocs = testing.AllocsPerRun(100, func() {
+		_, _, _, _ = DecodeRecord(encoded)
+	})
+	if allocs != 0 {
+		t.Fatalf("DecodeRecord allocated %f objects, want 0", allocs)
+	}
+
+	// Verify decoded content
+	gotKey, gotVal, consumed, err := DecodeRecord(encoded)
+	if err != nil {
+		t.Fatalf("DecodeRecord: %v", err)
+	}
+	if consumed != len(encoded) {
+		t.Fatalf("consumed = %d, want %d", consumed, len(encoded))
+	}
+	if !bytes.Equal(gotKey, key) {
+		t.Fatalf("key mismatch: got %q, want %q", gotKey, key)
+	}
+	if !bytes.Equal(gotVal, val) {
+		t.Fatalf("val mismatch: got %q, want %q", gotVal, val)
+	}
+}
+
 func TestEncodeDecodeRecord_EmptyKeyAndEmptyVal(t *testing.T) {
 	data, err := EncodeRecord(nil, nil)
 	if err != nil {

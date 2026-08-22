@@ -5,9 +5,10 @@ import (
 	"sort"
 )
 
-// indexEntry locates one key's latest record on disk.
+// indexEntry locates one key's latest record on disk across the segment ring.
 type indexEntry struct {
-	Offset int64  // File offset where the record begins
+	SegID  uint16 // Segment index in the circular ring [0 .. NumSegments-1]
+	Offset int64  // Byte offset within that specific segment file
 	Length uint32 // Total record size in bytes
 }
 

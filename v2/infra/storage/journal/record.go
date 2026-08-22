@@ -17,37 +17,59 @@ const (
 	recordHeaderSize      = recordLengthFieldSize + recordCRCFieldSize + recordKeyLenFieldSize
 )
 
-// EncodeRecord serializes a raw key and value into an on-disk binary WAL record.
+// RecordEncodedLen returns the exact total byte size needed to encode a record with the given key and value lengths.
+func RecordEncodedLen(keyLen, valLen int) int {
+	return recordHeaderSize + keyLen + valLen
+}
+
+// EncodeRecordTo serializes key and val directly into dst in a single pass without heap allocations.
+// dst must have cap(dst) >= RecordEncodedLen(len(key), len(val)).
 //
 // 0               4          8          10              10+KeyLen
 // ┌───────────────┬──────────┬──────────┬───────────────┬──────────────────────┐
 // │ Length uint32 │  CRC32   │  KeyLen  │      Key      │    Value (Payload)   │
 // │ (Excl Length) │ (uint32) │ (uint16) │ (KeyLen bytes)│   (variable bytes)   │
 // └───────────────┴──────────┴──────────┴───────────────┴──────────────────────┘
-//
-// Length covers everything after the Length field (CRC + KeyLen + Key + Value).
-// CRC32 (IEEE) covers KeyLen + Key + Value to detect torn writes.
-func EncodeRecord(key []byte, val []byte) ([]byte, error) {
+func EncodeRecordTo(dst []byte, key []byte, val []byte) ([]byte, error) {
 	if len(key) > math.MaxUint16 {
 		return nil, fmt.Errorf("journal: key too long to encode: %d bytes", len(key))
 	}
 
-	body := make([]byte, 0, recordKeyLenFieldSize+len(key)+len(val))
-	body = binary.BigEndian.AppendUint16(body, uint16(len(key)))
-	body = append(body, key...)
-	body = append(body, val...)
+	totalLen := RecordEncodedLen(len(key), len(val))
+	if cap(dst) < totalLen {
+		dst = make([]byte, totalLen)
+	} else {
+		dst = dst[:totalLen]
+	}
 
-	crc := crc32.ChecksumIEEE(body)
-	length := uint32(recordCRCFieldSize + len(body))
+	// 1. Length field (covers CRC + KeyLen + Key + Value)
+	length := uint32(totalLen - recordLengthFieldSize)
+	binary.BigEndian.PutUint32(dst[0:4], length)
 
-	record := make([]byte, 0, recordLengthFieldSize+int(length))
-	record = binary.BigEndian.AppendUint32(record, length)
-	record = binary.BigEndian.AppendUint32(record, crc)
-	record = append(record, body...)
-	return record, nil
+	// 2. KeyLen field
+	binary.BigEndian.PutUint16(dst[8:10], uint16(len(key)))
+
+	// 3. Key and Value payloads
+	keyEnd := 10 + len(key)
+	copy(dst[10:keyEnd], key)
+	copy(dst[keyEnd:totalLen], val)
+
+	// 4. IEEE CRC32 calculated in-place over KeyLen + Key + Value
+	crc := crc32.ChecksumIEEE(dst[8:totalLen])
+	binary.BigEndian.PutUint32(dst[4:8], crc)
+
+	return dst[:totalLen], nil
 }
 
-// DecodeRecord parses a record from data. Returns the raw key, value, total bytes consumed, or error.
+// EncodeRecord serializes a raw key and value into a newly allocated binary WAL record.
+func EncodeRecord(key []byte, val []byte) ([]byte, error) {
+	totalLen := RecordEncodedLen(len(key), len(val))
+	dst := make([]byte, totalLen)
+	return EncodeRecordTo(dst, key, val)
+}
+
+// DecodeRecord parses a record from data and returns direct zero-copy subslices for key and value.
+// The returned key and val slices point directly into data without memory allocations.
 func DecodeRecord(data []byte) (key []byte, val []byte, consumed int, err error) {
 	if len(data) < recordLengthFieldSize {
 		return nil, nil, 0, fmt.Errorf("%w: record length header truncated: have %d bytes, need %d",
@@ -78,10 +100,10 @@ func DecodeRecord(data []byte) (key []byte, val []byte, consumed int, err error)
 	if uint64(len(rest)) < uint64(keyLen) {
 		return nil, nil, 0, fmt.Errorf("%w: record key truncated", quorumerr.ErrCorruptedData)
 	}
-	k := make([]byte, keyLen)
-	copy(k, rest[:keyLen])
-	v := make([]byte, len(rest)-int(keyLen))
-	copy(v, rest[keyLen:])
+
+	// Zero-copy subslice views
+	k := rest[:keyLen]
+	v := rest[keyLen:]
 
 	return k, v, int(total), nil
 }

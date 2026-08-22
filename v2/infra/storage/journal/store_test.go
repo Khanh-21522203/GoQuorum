@@ -3,6 +3,7 @@ package journal
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -31,6 +32,7 @@ type testStore struct {
 	reads     map[uint64]chan readRes
 	writes    map[uint64]chan error
 	scans     map[uint64]chan scanRes
+	compacts  map[uint64]chan compactRes
 }
 
 type readRes struct {
@@ -43,18 +45,29 @@ type scanRes struct {
 	err   error
 }
 
+type compactRes struct {
+	stats CompactStats
+	err   error
+}
+
 func openTestStore(t testing.TB, rt *ioruntime.Runtime, path string) *testStore {
 	t.Helper()
-	store, err := Open(rt, Options{Path: path})
+	return openTestStoreWithOptions(t, rt, Options{Path: path})
+}
+
+func openTestStoreWithOptions(t testing.TB, rt *ioruntime.Runtime, opts Options) *testStore {
+	t.Helper()
+	store, err := Open(rt, opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
 	ts := &testStore{
-		store:  store,
-		reads:  make(map[uint64]chan readRes),
-		writes: make(map[uint64]chan error),
-		scans:  make(map[uint64]chan scanRes),
+		store:    store,
+		reads:    make(map[uint64]chan readRes),
+		writes:   make(map[uint64]chan error),
+		scans:    make(map[uint64]chan scanRes),
+		compacts: make(map[uint64]chan compactRes),
 	}
 
 	store.OnReadComplete = func(reqID uint64, key, val []byte, err error) {
@@ -75,6 +88,13 @@ func openTestStore(t testing.TB, rt *ioruntime.Runtime, path string) *testStore 
 		if ch, ok := ts.scans[scanID]; ok {
 			delete(ts.scans, scanID)
 			ch <- scanRes{items: items, err: err}
+		}
+	}
+
+	store.OnCompactComplete = func(compactID uint64, stats CompactStats, err error) {
+		if ch, ok := ts.compacts[compactID]; ok {
+			delete(ts.compacts, compactID)
+			ch <- compactRes{stats: stats, err: err}
 		}
 	}
 
@@ -182,6 +202,27 @@ func (ts *testStore) scan(t testing.TB, start, end []byte) ([]ScanEntry, error) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("Scan did not complete")
 		return nil, nil
+	}
+}
+
+func (ts *testStore) compact(t testing.TB, filter CompactFilter) (CompactStats, error) {
+	t.Helper()
+	done := make(chan compactRes, 1)
+	ts.r.PostFunc(func() {
+		ts.nextReqID++
+		compactID := ts.nextReqID
+		ts.compacts[compactID] = done
+		if err := ts.store.Compact(compactID, filter); err != nil {
+			delete(ts.compacts, compactID)
+			done <- compactRes{err: err}
+		}
+	})
+	select {
+	case r := <-done:
+		return r.stats, r.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Compact did not complete")
+		return CompactStats{}, nil
 	}
 }
 
@@ -357,4 +398,326 @@ func TestStore_OnStorageError_FiresOnDiskError(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("OnStorageError did not fire for EIO")
 	}
+}
+
+func TestStore_Compact(t *testing.T) {
+	rt := newTestRuntime(t)
+	ts := openTestStore(t, rt, filepath.Join(t.TempDir(), "wal.log"))
+
+	// 1. Write 3 versions of key "k1" (causing 2 dead versions)
+	for i := 0; i < 3; i++ {
+		if err := ts.put(t, []byte("k1"), []byte(fmt.Sprintf("v1-%d", i))); err != nil {
+			t.Fatalf("Put k1: %v", err)
+		}
+	}
+
+	// 2. Write key "k2" that will be discarded by compaction filter
+	if err := ts.put(t, []byte("k2"), []byte("v2-to-discard")); err != nil {
+		t.Fatalf("Put k2: %v", err)
+	}
+
+	// 3. Write key "k3" that will survive
+	if err := ts.put(t, []byte("k3"), []byte("v3-keep")); err != nil {
+		t.Fatalf("Put k3: %v", err)
+	}
+
+	stats, err := ts.compact(t, func(key, val []byte) (bool, []byte) {
+		if string(key) == "k2" {
+			return false, nil // Discard k2!
+		}
+		return true, val
+	})
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	if stats.LiveKeyCount != 2 {
+		t.Fatalf("expected 2 live keys after compaction, got %d", stats.LiveKeyCount)
+	}
+	if stats.BytesReclaimed == 0 {
+		t.Fatalf("expected positive BytesReclaimed, got %d", stats.BytesReclaimed)
+	}
+
+	// Verify k1 has latest version
+	gotK1, err := ts.get(t, []byte("k1"))
+	if err != nil {
+		t.Fatalf("Get k1: %v", err)
+	}
+	if string(gotK1) != "v1-2" {
+		t.Fatalf("k1 = %q, want %q", gotK1, "v1-2")
+	}
+
+	// Verify k2 is gone
+	_, err = ts.get(t, []byte("k2"))
+	if !errors.Is(err, quorumerr.ErrKeyNotFound) {
+		t.Fatalf("expected ErrKeyNotFound for k2, got %v", err)
+	}
+
+	// Verify k3 is present
+	gotK3, err := ts.get(t, []byte("k3"))
+	if err != nil {
+		t.Fatalf("Get k3: %v", err)
+	}
+	if string(gotK3) != "v3-keep" {
+		t.Fatalf("k3 = %q, want %q", gotK3, "v3-keep")
+	}
+}
+
+func TestStore_SegmentRotation_WrapsAroundRing(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	// 3 segments, 100 bytes capacity each
+	ts := openTestStoreWithOptions(t, rt, Options{
+		DataDir:     dir,
+		NumSegments: 3,
+		SegmentSize: 100,
+	})
+
+	// Record size for "k1" / "value-1" is ~40 bytes.
+	// 2 writes will fill ~80 bytes (fits in seg 0).
+	// 3rd write will overflow 100B -> rotates to seg 1!
+	// 5th write will rotate to seg 2!
+	// 7th write will wrap around to seg 0!
+
+	for i := 0; i < 7; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		val := []byte(fmt.Sprintf("val-%d", i))
+		if err := ts.put(t, key, val); err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+
+	// Verify all keys can still be retrieved across the segments in O(1)
+	for i := 0; i < 7; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		want := fmt.Sprintf("val-%d", i)
+		got, err := ts.get(t, key)
+		if err != nil {
+			t.Fatalf("Get %s: %v", key, err)
+		}
+		if string(got) != want {
+			t.Fatalf("Get %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestStore_MultiSegment_Scan(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	// 4 segments, 120 bytes capacity each
+	ts := openTestStoreWithOptions(t, rt, Options{
+		DataDir:     dir,
+		NumSegments: 4,
+		SegmentSize: 120,
+	})
+
+	// Write keys that will distribute across all 4 segments:
+	keys := []string{"d", "a", "c", "b", "f", "e"}
+	for _, k := range keys {
+		if err := ts.put(t, []byte(k), []byte("payload-"+k)); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+
+	// Scan all keys [a .. z)
+	items, err := ts.scan(t, []byte("a"), []byte("z"))
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	if len(items) != len(keys) {
+		t.Fatalf("Scan got %d items, want %d", len(items), len(keys))
+	}
+
+	wantOrder := []string{"a", "b", "c", "d", "e", "f"}
+	for i, wantKey := range wantOrder {
+		if string(items[i].Key) != wantKey {
+			t.Fatalf("items[%d].Key = %q, want %q", i, items[i].Key, wantKey)
+		}
+		if string(items[i].Value) != "payload-"+wantKey {
+			t.Fatalf("items[%d].Value = %q, want %q", i, items[i].Value, "payload-"+wantKey)
+		}
+	}
+}
+
+func TestStore_MultiSegment_Compaction(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	// 3 segments, 100 bytes capacity each
+	ts := openTestStoreWithOptions(t, rt, Options{
+		DataDir:     dir,
+		NumSegments: 3,
+		SegmentSize: 100,
+	})
+
+	// Write multiple versions to generate dead records
+	for i := 0; i < 5; i++ {
+		_ = ts.put(t, []byte("active-key"), []byte(fmt.Sprintf("v-%d", i)))
+	}
+	_ = ts.put(t, []byte("dead-key"), []byte("to-delete"))
+
+	stats, err := ts.compact(t, func(key, val []byte) (bool, []byte) {
+		if string(key) == "dead-key" {
+			return false, nil // Filter out
+		}
+		return true, val
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	if stats.LiveKeyCount != 1 {
+		t.Fatalf("LiveKeyCount = %d, want 1", stats.LiveKeyCount)
+	}
+
+	// Verify active-key is preserved with latest version
+	got, err := ts.get(t, []byte("active-key"))
+	if err != nil {
+		t.Fatalf("Get active-key: %v", err)
+	}
+	if string(got) != "v-4" {
+		t.Fatalf("got %q, want %q", got, "v-4")
+	}
+
+	// Verify dead-key is gone
+	_, err = ts.get(t, []byte("dead-key"))
+	if !errors.Is(err, quorumerr.ErrKeyNotFound) {
+		t.Fatalf("expected ErrKeyNotFound for dead-key, got %v", err)
+	}
+}
+
+func TestStore_EpochRecovery_RecoversHeadAndTailOnReopen(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	opts := Options{
+		DataDir:     dir,
+		NumSegments: 3,
+		SegmentSize: 100,
+	}
+
+	// 1. First run: Rotate through multiple epochs
+	ts1 := openTestStoreWithOptions(t, rt, opts)
+	for i := 0; i < 6; i++ {
+		key := []byte(fmt.Sprintf("k-%d", i))
+		val := []byte(fmt.Sprintf("val-%d", i))
+		if err := ts1.put(t, key, val); err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+	stats1 := ts1.store.Stats()
+	ts1.r.RequestStop()
+	if err := ts1.store.Close(); err != nil {
+		t.Fatalf("Close ts1: %v", err)
+	}
+
+	// 2. Reopen store in same directory
+	ts2 := openTestStoreWithOptions(t, rt, opts)
+	defer ts2.store.Close()
+	stats2 := ts2.store.Stats()
+
+	// Verify Head and Epoch are recovered accurately
+	if stats2.ActiveSeg != stats1.ActiveSeg {
+		t.Fatalf("recovered ActiveSeg = %d, want %d", stats2.ActiveSeg, stats1.ActiveSeg)
+	}
+	if stats2.CurrentEpoch != stats1.CurrentEpoch {
+		t.Fatalf("recovered CurrentEpoch = %d, want %d", stats2.CurrentEpoch, stats1.CurrentEpoch)
+	}
+
+	// Verify all data is intact
+	for i := 0; i < 6; i++ {
+		key := []byte(fmt.Sprintf("k-%d", i))
+		want := fmt.Sprintf("val-%d", i)
+		got, err := ts2.get(t, key)
+		if err != nil {
+			t.Fatalf("Get %s: %v", key, err)
+		}
+		if string(got) != want {
+			t.Fatalf("Get %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestStore_SegmentRotation_TruncatePreventsGhostRecords(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	opts := Options{
+		DataDir:     dir,
+		NumSegments: 2,
+		SegmentSize: 80, // Small segment capacity to trigger rapid rotation
+	}
+
+	// 1. Initial run: Fill Seg 0 and Seg 1 with old data
+	ts1 := openTestStoreWithOptions(t, rt, opts)
+	_ = ts1.put(t, []byte("ghost-key-1"), []byte("ghost-value-long-1"))
+	_ = ts1.put(t, []byte("ghost-key-2"), []byte("ghost-value-long-2"))
+	_ = ts1.put(t, []byte("ghost-key-3"), []byte("ghost-value-long-3"))
+	_ = ts1.put(t, []byte("ghost-key-4"), []byte("ghost-value-long-4"))
+
+	// Rotate back around to Seg 0 (overwriting Seg 0 with truncate)
+	_ = ts1.put(t, []byte("new-key-1"), []byte("new-val-1"))
+
+	ts1.r.RequestStop()
+	_ = ts1.store.Close()
+
+	// 2. Reopen store: Ensure ONLY surviving new keys are present, and old ghost keys on rotated Seg 0 are gone!
+	ts2 := openTestStoreWithOptions(t, rt, opts)
+	defer ts2.store.Close()
+
+	got, err := ts2.get(t, []byte("new-key-1"))
+	if err != nil {
+		t.Fatalf("Get new-key-1: %v", err)
+	}
+	if string(got) != "new-val-1" {
+		t.Fatalf("got %q, want %q", got, "new-val-1")
+	}
+
+	// Any overwritten ghost key should be cleanly inaccessible (not resurrected by ghost CRC blocks)
+	_, err = ts2.get(t, []byte("ghost-key-1"))
+	if !errors.Is(err, quorumerr.ErrKeyNotFound) {
+		t.Fatalf("expected ErrKeyNotFound for overwritten ghost-key-1, got %v", err)
+	}
+}
+
+func TestStore_ZeroAlloc_Operations(t *testing.T) {
+	rt := newTestRuntime(t)
+	dir := t.TempDir()
+
+	store, err := Open(rt, Options{
+		DataDir:     dir,
+		NumSegments: 3,
+		SegmentSize: 10 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	key := []byte("perf:user-account-12345")
+	val := []byte(`{"balance":5000,"currency":"USD"}`)
+
+	// 1. Direct Put submission zero-alloc
+	var reqID uint64 = 1
+	allocs := testing.AllocsPerRun(50, func() {
+		reqID++
+		_ = store.Put(reqID, key, val)
+	})
+	t.Logf("Direct Store.Put submission allocs per run: %f", allocs)
+
+	// Simulate write completion to populate index
+	store.HandleCompletion(reactor.Event{
+		UserData: reqID,
+		Result:   int64(RecordEncodedLen(len(key), len(val))),
+	})
+
+	// 2. Direct Get submission zero-alloc
+	allocs = testing.AllocsPerRun(50, func() {
+		reqID++
+		_ = store.Get(reqID, key)
+	})
+	t.Logf("Direct Store.Get submission allocs per run: %f", allocs)
 }

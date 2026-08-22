@@ -8,9 +8,9 @@ func TestIndex_SetGetDelete(t *testing.T) {
 		t.Fatal("expected miss on empty index")
 	}
 
-	idx.Set([]byte("k"), indexEntry{Offset: 10, Length: 5})
+	idx.Set([]byte("k"), indexEntry{SegID: 2, Offset: 10, Length: 5})
 	e, ok := idx.Get([]byte("k"))
-	if !ok || e.Offset != 10 || e.Length != 5 {
+	if !ok || e.SegID != 2 || e.Offset != 10 || e.Length != 5 {
 		t.Fatalf("unexpected entry: %+v ok=%v", e, ok)
 	}
 
@@ -22,11 +22,11 @@ func TestIndex_SetGetDelete(t *testing.T) {
 
 func TestIndex_SetOverwritesPreviousEntry(t *testing.T) {
 	idx := newIndex()
-	idx.Set([]byte("k"), indexEntry{Offset: 0, Length: 1})
-	idx.Set([]byte("k"), indexEntry{Offset: 100, Length: 2})
+	idx.Set([]byte("k"), indexEntry{SegID: 0, Offset: 0, Length: 1})
+	idx.Set([]byte("k"), indexEntry{SegID: 1, Offset: 100, Length: 2})
 
 	e, ok := idx.Get([]byte("k"))
-	if !ok || e.Offset != 100 || e.Length != 2 {
+	if !ok || e.SegID != 1 || e.Offset != 100 || e.Length != 2 {
 		t.Fatalf("expected overwritten entry, got %+v ok=%v", e, ok)
 	}
 }

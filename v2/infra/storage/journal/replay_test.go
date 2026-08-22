@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,4 +171,75 @@ func mustOpenTempFile(t *testing.T) *os.File {
 		t.Fatalf("OpenFile: %v", err)
 	}
 	return f
+}
+
+func TestReplayRingSegments_StatusCompactedAnchorSkipsOlderSegments(t *testing.T) {
+	dir := t.TempDir()
+	files := make([]*os.File, 4)
+	for i := 0; i < 4; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("wal_%d.log", i))
+		f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			t.Fatalf("OpenFile: %v", err)
+		}
+		defer f.Close()
+		files[i] = f
+	}
+
+	// 1. Seg 0: Stale writer from ancient Epoch 100 with key "ancient-key"
+	hdr0 := EncodeSegmentHeader(100, StatusWriter)
+	_, _ = files[0].WriteAt(hdr0, 0)
+	rec0, _ := EncodeRecord([]byte("ancient-key"), []byte("ancient-val"))
+	_, _ = files[0].WriteAt(rec0, SegmentHeaderSize)
+
+	// 2. Seg 1: StatusCompacted checkpoint at Epoch 102 with key "base-key"
+	hdr1 := EncodeSegmentHeader(102, StatusCompacted)
+	_, _ = files[1].WriteAt(hdr1, 0)
+	rec1, _ := EncodeRecord([]byte("base-key"), []byte("base-val"))
+	_, _ = files[1].WriteAt(rec1, SegmentHeaderSize)
+
+	// 3. Seg 2: StatusWriter at Epoch 103 with key "writer-key"
+	hdr2 := EncodeSegmentHeader(103, StatusWriter)
+	_, _ = files[2].WriteAt(hdr2, 0)
+	rec2, _ := EncodeRecord([]byte("writer-key"), []byte("writer-val"))
+	_, _ = files[2].WriteAt(rec2, SegmentHeaderSize)
+
+	// 4. Seg 3: StatusEmpty / uninitialized
+	hdr3 := EncodeSegmentHeader(0, StatusEmpty)
+	_, _ = files[3].WriteAt(hdr3, 0)
+
+	// Run ReplayRingSegments
+	idx, activeSeg, tailSeg, maxEpoch, tailOffset, err := ReplayRingSegments(files)
+	if err != nil {
+		t.Fatalf("ReplayRingSegments: %v", err)
+	}
+
+	// Check activeSeg is Seg 2 (latest writer)
+	if activeSeg != 2 {
+		t.Fatalf("activeSeg = %d, want 2", activeSeg)
+	}
+	if tailSeg != 1 {
+		t.Fatalf("tailSeg = %d, want 1 (compacted base)", tailSeg)
+	}
+	if maxEpoch != 103 {
+		t.Fatalf("maxEpoch = %d, want 103", maxEpoch)
+	}
+	if tailOffset != SegmentHeaderSize+int64(len(rec2)) {
+		t.Fatalf("tailOffset = %d, want %d", tailOffset, SegmentHeaderSize+int64(len(rec2)))
+	}
+
+	// Verify "base-key" from compacted base exists
+	if _, ok := idx.Get([]byte("base-key")); !ok {
+		t.Fatal("expected base-key from compacted segment to be present in index")
+	}
+
+	// Verify "writer-key" from active writer exists
+	if _, ok := idx.Get([]byte("writer-key")); !ok {
+		t.Fatal("expected writer-key to be present in index")
+	}
+
+	// Verify "ancient-key" from Epoch 100 was SKIPPED completely!
+	if _, ok := idx.Get([]byte("ancient-key")); ok {
+		t.Fatal("expected ancient-key before compaction checkpoint to be SKIPPED")
+	}
 }

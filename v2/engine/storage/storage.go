@@ -13,9 +13,11 @@ type KVStore interface {
 	Put(reqID uint64, key []byte, val []byte) error
 	Delete(reqID uint64, key []byte) error
 	Scan(scanID uint64, start, end []byte) error
+	Compact(compactID uint64, filter journal.CompactFilter) error
 	SetOnReadComplete(fn func(reqID uint64, key []byte, val []byte, err error))
 	SetOnWriteComplete(fn func(reqID uint64, key []byte, err error))
 	SetOnScanComplete(fn func(scanID uint64, items []journal.ScanEntry, err error))
+	SetOnCompactComplete(fn func(compactID uint64, stats journal.CompactStats, err error))
 	SetOnStorageError(fn func(err error))
 	Close() error
 }

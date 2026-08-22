@@ -33,10 +33,11 @@ type Adapter struct {
 	kv     KVStore
 	nodeID node.NodeID
 
-	nextReqID     uint64
-	pendingReads  map[uint64]pendingRead
-	pendingWrites map[uint64]func(error)
-	pendingScans  map[uint64]*pendingScan
+	nextReqID       uint64
+	pendingReads    map[uint64]pendingRead
+	pendingWrites   map[uint64]func(error)
+	pendingScans    map[uint64]*pendingScan
+	pendingCompacts map[uint64]func(journal.CompactStats, error)
 
 	// OnStorageError is invoked whenever the underlying KVStore reports a storage error.
 	OnStorageError func(err error)
@@ -47,15 +48,17 @@ var _ Storage = (*Adapter)(nil)
 // NewAdapter creates a new Storage adapter over an event-driven KVStore.
 func NewAdapter(kv KVStore, nodeID node.NodeID) *Adapter {
 	a := &Adapter{
-		kv:            kv,
-		nodeID:        nodeID,
-		pendingReads:  make(map[uint64]pendingRead),
-		pendingWrites: make(map[uint64]func(error)),
-		pendingScans:  make(map[uint64]*pendingScan),
+		kv:              kv,
+		nodeID:          nodeID,
+		pendingReads:    make(map[uint64]pendingRead),
+		pendingWrites:   make(map[uint64]func(error)),
+		pendingScans:    make(map[uint64]*pendingScan),
+		pendingCompacts: make(map[uint64]func(journal.CompactStats, error)),
 	}
 	kv.SetOnReadComplete(a.onReadComplete)
 	kv.SetOnWriteComplete(a.onWriteComplete)
 	kv.SetOnScanComplete(a.onScanComplete)
+	kv.SetOnCompactComplete(a.onCompactComplete)
 	kv.SetOnStorageError(a.onStorageError)
 	return a
 }
@@ -118,23 +121,32 @@ func (a *Adapter) onScanComplete(scanID uint64, items []journal.ScanEntry, err e
 	for _, item := range items {
 		var ss SiblingSet
 		if err := ss.UnmarshalBinary(item.Value); err != nil {
-			continue
+			continue // Skip corrupted entry
 		}
 		if lastSiblingIsTombstone(&ss) {
-			continue
+			continue // Skip tombstone in standard domain scan
 		}
 		filtered := filterSiblings(&ss, true)
 		if len(filtered.Siblings) == 0 {
 			continue
 		}
 		if !ps.fn(item.Key, filtered) {
-			break // Early stop requested by caller
+			break
 		}
 	}
 	ps.done(nil)
 }
 
-// Get returns active siblings for key, filtering out tombstones and expired values.
+func (a *Adapter) onCompactComplete(compactID uint64, stats journal.CompactStats, err error) {
+	cb, ok := a.pendingCompacts[compactID]
+	if !ok {
+		return
+	}
+	delete(a.pendingCompacts, compactID)
+	cb(stats, err)
+}
+
+// Get returns the sibling set for key, filtering out tombstones and expired siblings.
 func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
@@ -146,7 +158,7 @@ func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
 	}
 }
 
-// GetRaw returns all siblings for key including tombstones (used by anti-entropy and read-repair).
+// GetRaw returns the sibling set for key with tombstones visible (used by anti-entropy).
 func (a *Adapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
@@ -158,45 +170,53 @@ func (a *Adapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
 	}
 }
 
-// Put reconciles incoming siblings with the existing set using append-union policy.
-func (a *Adapter) Put(key []byte, incoming *SiblingSet, done func(error)) {
+// Put reconciles incoming siblings against existing siblings and persists the result.
+func (a *Adapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
 	a.GetRaw(key, func(existing *SiblingSet, err error) {
 		if err != nil && !errors.Is(err, quorumerr.ErrKeyNotFound) {
 			done(err)
 			return
 		}
-		var merged SiblingSet
-		if existing != nil {
-			merged.Siblings = append(append([]Sibling{}, existing.Siblings...), incoming.Siblings...)
+
+		var merged *SiblingSet
+		if existing == nil {
+			merged = siblings
 		} else {
-			merged.Siblings = append([]Sibling{}, incoming.Siblings...)
+			merged = Reconcile(existing, siblings)
 		}
-		buf, mErr := merged.MarshalBinary()
-		if mErr != nil {
-			done(fmt.Errorf("storage: encoding sibling set: %w", mErr))
+
+		buf, err := merged.MarshalBinary()
+		if err != nil {
+			done(fmt.Errorf("%w: encoding sibling set: %v", quorumerr.ErrCorruptedData, err))
 			return
 		}
+
 		a.nextReqID++
 		reqID := a.nextReqID
 		a.pendingWrites[reqID] = done
-		if pErr := a.kv.Put(reqID, key, buf); pErr != nil {
+
+		if err := a.kv.Put(reqID, key, buf); err != nil {
 			delete(a.pendingWrites, reqID)
-			done(pErr)
+			done(err)
 		}
 	})
 }
 
-// Delete appends a deletion tombstone for key causally ordered by ctx.
+// Delete writes a tombstone sibling causally ordered by ctx.
 func (a *Adapter) Delete(key []byte, ctx vclock.VectorClock, done func(error)) {
-	tombstone := &SiblingSet{Siblings: []Sibling{{
-		Tombstone: true,
-		VClock:    ctx,
-		Timestamp: time.Now().Unix(),
-	}}}
+	tombstone := &SiblingSet{
+		Siblings: []Sibling{
+			{
+				VClock:    ctx.Copy(),
+				Timestamp: time.Now().UnixNano(),
+				Tombstone: true,
+			},
+		},
+	}
 	a.Put(key, tombstone, done)
 }
 
-// Scan visits every key in [start, end) in order with tombstones filtered out.
+// Scan visits every key in [start, end) in order, invoking fn for each one.
 func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 	a.nextReqID++
 	scanID := a.nextReqID
@@ -205,6 +225,39 @@ func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 	if err := a.kv.Scan(scanID, start, end); err != nil {
 		delete(a.pendingScans, scanID)
 		done(err)
+	}
+}
+
+// Compact initiates compaction on the underlying KVStore, applying domain-level
+// tombstone and TTL filtering.
+func (a *Adapter) Compact(done func(journal.CompactStats, error)) {
+	a.nextReqID++
+	compactID := a.nextReqID
+	a.pendingCompacts[compactID] = done
+
+	filter := func(key, val []byte) (bool, []byte) {
+		var ss SiblingSet
+		if err := ss.UnmarshalBinary(val); err != nil {
+			return false, nil // Discard corrupted data
+		}
+		// If last sibling is tombstone, drop record entirely during compaction
+		if lastSiblingIsTombstone(&ss) {
+			return false, nil
+		}
+		filtered := filterSiblings(&ss, true)
+		if len(filtered.Siblings) == 0 {
+			return false, nil
+		}
+		newBytes, err := filtered.MarshalBinary()
+		if err != nil {
+			return false, nil
+		}
+		return true, newBytes
+	}
+
+	if err := a.kv.Compact(compactID, filter); err != nil {
+		delete(a.pendingCompacts, compactID)
+		done(journal.CompactStats{}, err)
 	}
 }
 

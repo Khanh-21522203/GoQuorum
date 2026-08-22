@@ -12,10 +12,11 @@ import (
 )
 
 type memoryKV struct {
-	data            map[string][]byte
-	onReadComplete  func(reqID uint64, key []byte, val []byte, err error)
-	onWriteComplete func(reqID uint64, key []byte, err error)
-	onScanComplete  func(scanID uint64, items []journal.ScanEntry, err error)
+	data              map[string][]byte
+	onReadComplete    func(reqID uint64, key []byte, val []byte, err error)
+	onWriteComplete   func(reqID uint64, key []byte, err error)
+	onScanComplete    func(scanID uint64, items []journal.ScanEntry, err error)
+	onCompactComplete func(compactID uint64, stats journal.CompactStats, err error)
 }
 
 func newMemoryKV() *memoryKV {
@@ -88,6 +89,43 @@ func (m *memoryKV) Scan(scanID uint64, start, end []byte) error {
 	}
 	if m.onScanComplete != nil {
 		m.onScanComplete(scanID, items, nil)
+	}
+	return nil
+}
+
+func (m *memoryKV) SetOnCompactComplete(fn func(compactID uint64, stats journal.CompactStats, err error)) {
+	m.onCompactComplete = fn
+}
+
+func (m *memoryKV) Compact(compactID uint64, filter journal.CompactFilter) error {
+	var originalBytes uint64
+	for _, v := range m.data {
+		originalBytes += uint64(len(v))
+	}
+
+	for k, v := range m.data {
+		if filter != nil {
+			keep, newVal := filter([]byte(k), v)
+			if !keep {
+				delete(m.data, k)
+			} else {
+				m.data[k] = newVal
+			}
+		}
+	}
+
+	var compactedBytes uint64
+	for _, v := range m.data {
+		compactedBytes += uint64(len(v))
+	}
+
+	if m.onCompactComplete != nil {
+		m.onCompactComplete(compactID, journal.CompactStats{
+			OriginalBytes:  originalBytes,
+			CompactedBytes: compactedBytes,
+			BytesReclaimed: originalBytes - compactedBytes,
+			LiveKeyCount:   int64(len(m.data)),
+		}, nil)
 	}
 	return nil
 }
@@ -182,5 +220,48 @@ func TestAdapter_Scan(t *testing.T) {
 
 	if len(scanned) != 3 || scanned[0] != "a" || scanned[1] != "b" || scanned[2] != "c" {
 		t.Fatalf("unexpected scan results: %v", scanned)
+	}
+}
+
+func TestAdapter_Compact(t *testing.T) {
+	kv := newMemoryKV()
+	adapter := NewAdapter(kv, "node-1")
+
+	// 1. Write live key
+	ssLive := &SiblingSet{Siblings: []Sibling{{Value: []byte("alive-val")}}}
+	adapter.Put([]byte("live-key"), ssLive, func(err error) {})
+
+	// 2. Write key and delete it (tombstone)
+	ssDead := &SiblingSet{Siblings: []Sibling{{Value: []byte("dead-val")}}}
+	adapter.Put([]byte("dead-key"), ssDead, func(err error) {})
+	adapter.Delete([]byte("dead-key"), vclock.VectorClock{}, func(err error) {})
+
+	// Run compaction
+	var compactStats journal.CompactStats
+	var compactErr error
+	adapter.Compact(func(stats journal.CompactStats, err error) {
+		compactStats = stats
+		compactErr = err
+	})
+
+	if compactErr != nil {
+		t.Fatalf("Compact failed: %v", compactErr)
+	}
+	if compactStats.LiveKeyCount != 1 {
+		t.Fatalf("expected 1 live key after compaction, got %d", compactStats.LiveKeyCount)
+	}
+
+	// Live key should still exist
+	var gotLive *SiblingSet
+	adapter.Get([]byte("live-key"), func(res *SiblingSet, err error) {
+		gotLive = res
+	})
+	if gotLive == nil || string(gotLive.Siblings[0].Value) != "alive-val" {
+		t.Fatalf("expected live-key to survive compaction, got %+v", gotLive)
+	}
+
+	// Dead key should be completely purged from KV store
+	if _, exists := kv.data["dead-key"]; exists {
+		t.Fatalf("expected dead-key to be purged during compaction")
 	}
 }

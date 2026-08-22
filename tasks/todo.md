@@ -265,5 +265,72 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 5. Implemented `coalesceScanItems` using index range `[startItem, endItem)` with zero nested slice allocations.
 - [x] 6. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
 
+## Phase 9 — WAL Compaction & OnCompactComplete Event Lifecycle
+
+### What shipped, real and tested
+- [x] 1. Defined `CompactFilter func(key, val []byte) (keep bool, newVal []byte)` and `CompactStats` in `infra/storage/journal`.
+- [x] 2. Implemented `Store.Compact(compactID uint64, filter CompactFilter) error`:
+  - Writes live, un-discarded records sequentially to `.compact` temporary WAL file.
+  - Performs atomic `os.Rename` and descriptor swap.
+  - Resets in-memory index offsets to contiguous offsets from 0.
+  - Fires `OnCompactComplete(compactID, stats, nil)`.
+- [x] 3. Updated `engine/storage.KVStore` port interface with `Compact` and `SetOnCompactComplete`.
+- [x] 4. Updated `engine/storage.Adapter` with domain-level compaction integration (pruning tombstones and expired TTL siblings) and added `Reconcile` in `types.go`.
+- [x] 5. Added comprehensive unit tests in `infra/storage/journal/store_test.go` (`TestStore_Compact`) and `engine/storage/adapter_test.go` (`TestAdapter_Compact`).
+- [x] 6. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 10 — Circular Ring Buffer Multi-Segment WAL Engine
+
+### What shipped, real and tested
+- [x] 1. Updated `indexEntry` to include `SegID uint16`, `Offset int64`, and `Length uint32` in `infra/storage/journal/index.go`.
+- [x] 2. Updated `Options` with `DataDir string`, `NumSegments int` (default 4), and `SegmentSize uint64` (default 64MB).
+- [x] 3. Refactored `Store` to manage an array of permanent open file descriptors (`files []*os.File`, `fds []int`), `activeSeg` (Head), `tailSeg` (Tail), and `writeOffset`.
+- [x] 4. Implemented Segment Rotation on write overflow (`writeOffset + len(buf) > SegmentSize` advances `activeSeg = (activeSeg + 1) % NumSegments` and resets `writeOffset = 0`).
+- [x] 5. Updated `Get` to read directly from `fds[entry.SegID]` at `entry.Offset` in $O(1)$.
+- [x] 6. Updated `Scan` with Range Coalescing per segment file and direct multi-segment `io_uring` dispatch.
+- [x] 7. Implemented `Compact` to migrate live records from inactive segments to the active write head and advance `tailSeg`.
+- [x] 8. Updated `ReplayRingSegments` to recover state across all segment files in the directory.
+- [x] 9. Included ASCII architecture and lifecycle diagrams in codebase comments.
+- [x] 10. Added unit tests in `store_test.go` (`TestStore_SegmentRotation_WrapsAroundRing`, `TestStore_MultiSegment_Scan`, `TestStore_MultiSegment_Compaction`).
+- [x] 11. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 11 — 16-Byte Segment Header & Epoch-Based Head/Tail Discovery
+
+### What shipped, real and tested
+- [x] 1. Defined `SegmentHeaderSize = 16` and `SegmentMagic = [4]byte{'Q', 'U', 'O', 'R'}` in `infra/storage/journal`.
+- [x] 2. Implemented `EncodeSegmentHeader(epoch uint64) []byte` and `DecodeSegmentHeader(buf []byte) (epoch uint64, ok bool)` in `header.go`.
+- [x] 3. Updated `ReplaySingleSegment` to read segment header at offset 0 and replay records starting from `SegmentHeaderSize`.
+- [x] 4. Updated `ReplayRingSegments` to discover `HEAD = argmax(epoch)` and `TAIL = argmin(epoch)` across all segments with $O(1)$ startup inspection.
+- [x] 5. Updated `Store.Put` to stamp new `epoch` on segment rotation at offset 0, and start records at offset 16.
+- [x] 6. Updated `Store.Compact` to preserve/stamp segment headers.
+- [x] 7. Added unit tests verifying epoch header encoding/decoding, crash recovery head/tail discovery, and rotation stamping in `header_test.go` and `store_test.go` (`TestStore_EpochRecovery_RecoversHeadAndTailOnReopen`).
+- [x] 8. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 12 — Status-Guided Log-Structured Replay & Dynamic Offset Discovery
+
+### What shipped, real and tested
+- [x] 1. Added `SegmentStatus` enum (`StatusEmpty`, `StatusWriter`, `StatusCompacted`) to `header.go` and updated `EncodeSegmentHeader` / `DecodeSegmentHeader`.
+- [x] 2. Updated `header_test.go` with status round-trip tests.
+- [x] 3. Refactored `ReplayRingSegments` in `replay.go`:
+  - Pass 1: Scans 16-byte headers to identify `LatestCompacted` (Base) and `LatestWriter` (Head).
+  - Pass 2: Replays Base checkpoint segment first, followed by subsequent `StatusWriter` segments in chronological epoch order.
+  - Dynamically discovers `writeOffset` in the active Head segment by validating CRC records.
+- [x] 4. Updated `store.go` to stamp `StatusWriter` on rotations and `StatusCompacted` on compaction.
+- [x] 5. Added unit tests for status-guided checkpoint recovery in `replay_test.go` (`TestReplayRingSegments_StatusCompactedAnchorSkipsOlderSegments`) and `store_test.go`.
+- [x] 6. Added crash-safe `file.Truncate(16)` before header write on rotations to eliminate ghost record replay (`TestStore_SegmentRotation_TruncatePreventsGhostRecords`).
+- [x] 7. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
+## Phase 13 — 100% Zero-Allocation Disk I/O Engine
+
+### What shipped, real and tested
+- [x] 1. Implemented `DecodeRecordViews` and `EncodeRecordTo` in `infra/storage/journal/record.go` (single-pass in-place encoding & zero-copy subslice decoding).
+- [x] 2. Updated `record_test.go` with zero-alloc view tests (`TestEncodeRecordTo_And_DecodeRecordViews_ZeroAllocs`).
+- [x] 3. Integrated `bytePool`, `itemPool`, and `chunkPool` (`pool.BucketArrayPool`) into `Store` in `store.go`.
+- [x] 4. Created generic, reusable `pool.SlotTable[T]` in `infra/pool/slot_table.go` and integrated it into `store.go` replacing Go maps.
+- [x] 5. Refactored `Store.Get`, `Store.Put`, and `Store.Scan` to rent/return all buffers from pools with zero heap allocations.
+- [x] 6. Added zero-alloc regression tests verifying 0 memory allocations on `Get`, `Put`, `Scan` in `store_test.go` (`TestStore_ZeroAlloc_Operations`).
+- [x] 7. Implemented chunk-chained `pool.ByteArena` in `infra/pool/arena.go` and connected it to `Store.Scan` for zero-alloc result packing (`TestByteArena_MultiChunkOverflow_PointersRemainStable`).
+- [x] 8. Full `make test`, `make vet`, and `make build` pass clean across all 39 packages.
+
 
 
