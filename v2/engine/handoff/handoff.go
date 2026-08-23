@@ -4,11 +4,11 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/statemachine"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 )
 
 // maxHintAge bounds how long a hint may sit in the buffer before it is

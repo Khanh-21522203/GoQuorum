@@ -10,12 +10,12 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
+	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/coordinator"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
-	enginestorage "goquorum.io/v2/engine/storage"
-	enginetransport "goquorum.io/v2/engine/transport"
 	gatewayhttp "goquorum.io/v2/gateway/http"
 	"goquorum.io/v2/infra/affinity"
 	"goquorum.io/v2/infra/config"
@@ -48,8 +48,8 @@ type Server struct {
 	runtime *ioruntime.Runtime
 	reactor *reactor.Reactor
 
-	store         enginestorage.Storage
-	transport     enginetransport.Transport
+	store         storage.Storage
+	transport     transport.Transport
 	iouringClient *iouring.Client
 	iouringServer *iouring.Server
 
@@ -98,7 +98,7 @@ func New(cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
-	store := enginestorage.NewAdapter(rawStore, cfg.Node.NodeID)
+	store := storage.NewAdapter(rawStore, cfg.Node.NodeID)
 
 	// 3. Membership view.
 	mm := membership.NewMembershipManager(membershipConfig(cfg.Cluster), version)
@@ -124,10 +124,10 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("node %s not found in cfg.Cluster.Members (needed to know its own internal-RPC listen address)", cfg.Node.NodeID)
 	}
 
-	// 5. Transport port (engine/transport.Adapter wraps iouring.Client).
+	// 5. Transport port (engine/adapter/transport.Adapter wraps iouring.Client).
 	bytePool := pool.NewDefaultArrayPool[byte]()
 	tc := iouring.NewClient(rt, r, bytePool, nil)
-	adapter := enginetransport.NewAdapter(tc, r)
+	adapter := transport.NewAdapter(tc, r)
 	for _, m := range cfg.Cluster.Members {
 		if m.ID == cfg.Node.NodeID {
 			continue

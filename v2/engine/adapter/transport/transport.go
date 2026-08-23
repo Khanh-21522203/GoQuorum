@@ -3,7 +3,7 @@ package transport
 import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/storage"
+	"goquorum.io/v2/engine/adapter/storage"
 )
 
 // GossipEntry is one node's gossiped membership state transferred over the wire.

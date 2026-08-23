@@ -4,11 +4,11 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/statemachine"
-	"goquorum.io/v2/engine/transport"
 )
 
 // lifecycleState is the failure detector's own run state, distinct from any

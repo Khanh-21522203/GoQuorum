@@ -4,9 +4,9 @@ import (
 	"math/rand"
 
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/config"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 )
 
 // ReplicaRead is one replica's response to the read that triggered a

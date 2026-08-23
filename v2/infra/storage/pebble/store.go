@@ -4,7 +4,7 @@ import (
 	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/storage"
+	"goquorum.io/v2/engine/adapter/storage"
 )
 
 // Store implements engine/storage.Storage on top of Pebble.

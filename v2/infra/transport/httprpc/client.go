@@ -5,8 +5,8 @@ import (
 
 	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
+	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter/transport"
 )
 
 // ClientConfig configures the HTTP/JSON inter-node client's connection

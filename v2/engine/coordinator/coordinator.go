@@ -6,6 +6,8 @@ import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
+	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/antientropy"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
@@ -13,8 +15,6 @@ import (
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/readrepair"
 	"goquorum.io/v2/engine/statemachine"
-	"goquorum.io/v2/engine/storage"
-	"goquorum.io/v2/engine/transport"
 )
 
 // PutOptions carries per-request write tuning for a Put.

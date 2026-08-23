@@ -6,9 +6,9 @@ import (
 
 	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/engine/adapter/storage"
 	"goquorum.io/v2/engine/coordinator"
 	"goquorum.io/v2/engine/membership"
-	"goquorum.io/v2/engine/storage"
 )
 
 // InternalAPI implements the node-to-node service invoked by peer

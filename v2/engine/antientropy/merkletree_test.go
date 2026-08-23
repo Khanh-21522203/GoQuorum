@@ -7,7 +7,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/storage"
+	"goquorum.io/v2/engine/adapter/storage"
 )
 
 // sibling builds a single-sibling SiblingSet for a given node/counter/value,

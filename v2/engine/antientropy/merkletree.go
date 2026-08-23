@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 
-	"goquorum.io/v2/engine/storage"
+	"goquorum.io/v2/engine/adapter/storage"
 )
 
 // hashSize is the width of every leaf and internal node hash (SHA-256).

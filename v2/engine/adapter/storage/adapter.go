@@ -8,6 +8,7 @@ import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
+	"goquorum.io/v2/infra/pool"
 	"goquorum.io/v2/infra/storage/journal"
 )
 
@@ -16,15 +17,23 @@ type StatsProvider interface {
 	Stats() Stats
 }
 
-type pendingRead struct {
-	key     []byte
-	rawOnly bool
-	cb      func(*SiblingSet, error)
-}
+type storageOpType uint8
 
-type pendingScan struct {
-	fn   ScanFunc
-	done func(error)
+const (
+	storageOpRead storageOpType = iota + 1
+	storageOpWrite
+	storageOpScan
+	storageOpCompact
+)
+
+type pendingStorageOp struct {
+	opType     storageOpType
+	rawOnly    bool
+	onRead     func(*SiblingSet, error)
+	onWrite    func(error)
+	onScanFn   ScanFunc
+	onScanDone func(error)
+	onCompact  func(journal.CompactStats, error)
 }
 
 // Adapter adapts an event-driven KVStore into a domain Storage engine, managing
@@ -33,11 +42,8 @@ type Adapter struct {
 	kv     KVStore
 	nodeID node.NodeID
 
-	nextReqID       uint64
-	pendingReads    map[uint64]pendingRead
-	pendingWrites   map[uint64]func(error)
-	pendingScans    map[uint64]*pendingScan
-	pendingCompacts map[uint64]func(journal.CompactStats, error)
+	nextReqID uint64
+	slots     *pool.SlotTable[pendingStorageOp]
 
 	// OnStorageError is invoked whenever the underlying KVStore reports a storage error.
 	OnStorageError func(err error)
@@ -48,12 +54,9 @@ var _ Storage = (*Adapter)(nil)
 // NewAdapter creates a new Storage adapter over an event-driven KVStore.
 func NewAdapter(kv KVStore, nodeID node.NodeID) *Adapter {
 	a := &Adapter{
-		kv:              kv,
-		nodeID:          nodeID,
-		pendingReads:    make(map[uint64]pendingRead),
-		pendingWrites:   make(map[uint64]func(error)),
-		pendingScans:    make(map[uint64]*pendingScan),
-		pendingCompacts: make(map[uint64]func(journal.CompactStats, error)),
+		kv:     kv,
+		nodeID: nodeID,
+		slots:  pool.NewSlotTable[pendingStorageOp](1024),
 	}
 	kv.SetOnReadComplete(a.onReadComplete)
 	kv.SetOnWriteComplete(a.onWriteComplete)
@@ -70,51 +73,70 @@ func (a *Adapter) onStorageError(err error) {
 }
 
 func (a *Adapter) onReadComplete(reqID uint64, key []byte, val []byte, err error) {
-	pr, ok := a.pendingReads[reqID]
-	if !ok {
+	slot, ok := a.slots.Get(reqID)
+	if !ok || slot.Value.opType != storageOpRead {
 		return
 	}
-	delete(a.pendingReads, reqID)
+	cb := slot.Value.onRead
+	rawOnly := slot.Value.rawOnly
+	a.slots.Release(reqID)
 
 	if err != nil {
-		pr.cb(nil, err)
+		if cb != nil {
+			cb(nil, err)
+		}
 		return
 	}
 	var ss SiblingSet
 	if err := ss.UnmarshalBinary(val); err != nil {
-		pr.cb(nil, fmt.Errorf("%w: decoding sibling set: %v", quorumerr.ErrCorruptedData, err))
+		if cb != nil {
+			cb(nil, fmt.Errorf("%w: decoding sibling set: %v", quorumerr.ErrCorruptedData, err))
+		}
 		return
 	}
-	if !pr.rawOnly && lastSiblingIsTombstone(&ss) {
-		pr.cb(nil, quorumerr.ErrKeyNotFound)
+	if !rawOnly && lastSiblingIsTombstone(&ss) {
+		if cb != nil {
+			cb(nil, quorumerr.ErrKeyNotFound)
+		}
 		return
 	}
-	filtered := filterSiblings(&ss, !pr.rawOnly)
+	filtered := filterSiblings(&ss, !rawOnly)
 	if len(filtered.Siblings) == 0 {
-		pr.cb(nil, quorumerr.ErrKeyNotFound)
+		if cb != nil {
+			cb(nil, quorumerr.ErrKeyNotFound)
+		}
 		return
 	}
-	pr.cb(filtered, nil)
+	if cb != nil {
+		cb(filtered, nil)
+	}
 }
 
 func (a *Adapter) onWriteComplete(reqID uint64, key []byte, err error) {
-	cb, ok := a.pendingWrites[reqID]
-	if !ok {
+	slot, ok := a.slots.Get(reqID)
+	if !ok || slot.Value.opType != storageOpWrite {
 		return
 	}
-	delete(a.pendingWrites, reqID)
-	cb(err)
+	cb := slot.Value.onWrite
+	a.slots.Release(reqID)
+	if cb != nil {
+		cb(err)
+	}
 }
 
 func (a *Adapter) onScanComplete(scanID uint64, items []journal.ScanEntry, err error) {
-	ps, ok := a.pendingScans[scanID]
-	if !ok {
+	slot, ok := a.slots.Get(scanID)
+	if !ok || slot.Value.opType != storageOpScan {
 		return
 	}
-	delete(a.pendingScans, scanID)
+	scanFn := slot.Value.onScanFn
+	done := slot.Value.onScanDone
+	a.slots.Release(scanID)
 
 	if err != nil {
-		ps.done(err)
+		if done != nil {
+			done(err)
+		}
 		return
 	}
 
@@ -130,30 +152,40 @@ func (a *Adapter) onScanComplete(scanID uint64, items []journal.ScanEntry, err e
 		if len(filtered.Siblings) == 0 {
 			continue
 		}
-		if !ps.fn(item.Key, filtered) {
+		if scanFn != nil && !scanFn(item.Key, filtered) {
 			break
 		}
 	}
-	ps.done(nil)
+	if done != nil {
+		done(nil)
+	}
 }
 
 func (a *Adapter) onCompactComplete(compactID uint64, stats journal.CompactStats, err error) {
-	cb, ok := a.pendingCompacts[compactID]
-	if !ok {
+	slot, ok := a.slots.Get(compactID)
+	if !ok || slot.Value.opType != storageOpCompact {
 		return
 	}
-	delete(a.pendingCompacts, compactID)
-	cb(stats, err)
+	cb := slot.Value.onCompact
+	a.slots.Release(compactID)
+	if cb != nil {
+		cb(stats, err)
+	}
 }
 
 // Get returns the sibling set for key, filtering out tombstones and expired siblings.
 func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
-	a.pendingReads[reqID] = pendingRead{key: key, rawOnly: false, cb: done}
+	slot := a.slots.Acquire(reqID)
+	slot.Value = pendingStorageOp{
+		opType:  storageOpRead,
+		rawOnly: false,
+		onRead:  done,
+	}
 
 	if err := a.kv.Get(reqID, key); err != nil {
-		delete(a.pendingReads, reqID)
+		a.slots.Release(reqID)
 		done(nil, err)
 	}
 }
@@ -162,10 +194,15 @@ func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
 func (a *Adapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
-	a.pendingReads[reqID] = pendingRead{key: key, rawOnly: true, cb: done}
+	slot := a.slots.Acquire(reqID)
+	slot.Value = pendingStorageOp{
+		opType:  storageOpRead,
+		rawOnly: true,
+		onRead:  done,
+	}
 
 	if err := a.kv.Get(reqID, key); err != nil {
-		delete(a.pendingReads, reqID)
+		a.slots.Release(reqID)
 		done(nil, err)
 	}
 }
@@ -193,10 +230,14 @@ func (a *Adapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
 
 		a.nextReqID++
 		reqID := a.nextReqID
-		a.pendingWrites[reqID] = done
+		slot := a.slots.Acquire(reqID)
+		slot.Value = pendingStorageOp{
+			opType:  storageOpWrite,
+			onWrite: done,
+		}
 
 		if err := a.kv.Put(reqID, key, buf); err != nil {
-			delete(a.pendingWrites, reqID)
+			a.slots.Release(reqID)
 			done(err)
 		}
 	})
@@ -220,10 +261,15 @@ func (a *Adapter) Delete(key []byte, ctx vclock.VectorClock, done func(error)) {
 func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 	a.nextReqID++
 	scanID := a.nextReqID
-	a.pendingScans[scanID] = &pendingScan{fn: fn, done: done}
+	slot := a.slots.Acquire(scanID)
+	slot.Value = pendingStorageOp{
+		opType:     storageOpScan,
+		onScanFn:   fn,
+		onScanDone: done,
+	}
 
 	if err := a.kv.Scan(scanID, start, end); err != nil {
-		delete(a.pendingScans, scanID)
+		a.slots.Release(scanID)
 		done(err)
 	}
 }
@@ -233,7 +279,11 @@ func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 func (a *Adapter) Compact(done func(journal.CompactStats, error)) {
 	a.nextReqID++
 	compactID := a.nextReqID
-	a.pendingCompacts[compactID] = done
+	slot := a.slots.Acquire(compactID)
+	slot.Value = pendingStorageOp{
+		opType:    storageOpCompact,
+		onCompact: done,
+	}
 
 	filter := func(key, val []byte) (bool, []byte) {
 		var ss SiblingSet
@@ -256,7 +306,7 @@ func (a *Adapter) Compact(done func(journal.CompactStats, error)) {
 	}
 
 	if err := a.kv.Compact(compactID, filter); err != nil {
-		delete(a.pendingCompacts, compactID)
+		a.slots.Release(compactID)
 		done(journal.CompactStats{}, err)
 	}
 }
@@ -276,6 +326,7 @@ func (a *Adapter) Stats() Stats {
 
 // Close closes the underlying KVStore.
 func (a *Adapter) Close() error {
+	a.slots.Reset()
 	return a.kv.Close()
 }
 

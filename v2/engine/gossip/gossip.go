@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
+	"goquorum.io/v2/engine/adapter/transport"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/statemachine"
-	"goquorum.io/v2/engine/transport"
 )
 
 // NodeEntry is one node's gossiped membership state.

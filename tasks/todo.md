@@ -356,3 +356,33 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 7. Updated `server/app/server.go` and `conn_loopback_test.go` to use `enginetransport.NewAdapter`.
 - [x] 8. Verified all tests and `go vet` clean across all 39 packages.
 
+## Phase 16 — Layer 3 Adapter Decoupling & Zero-Alloc Refinement
+
+### Context & Goals
+- Refactor `engine/storage.Adapter` from heap `map[uint64]` to `pool.SlotTable[pendingStorageOp]` to match the zero-allocation pattern of `transport.Adapter` and `journal.Store`.
+- Clean up `engine/transport.Adapter`'s `pendingRPC` representation to reduce struct footprint and streamline RPC reply demuxing.
+- Verify zero regressions and full test suite pass across all packages.
+
+### What shipped, real and tested
+- [x] 1. Refactored `engine/storage.Adapter` to use `pool.SlotTable` for in-flight reads, writes, scans, and compactions, eliminating heap map allocations.
+- [x] 2. Streamlined `pendingRPC` in `engine/transport.Adapter`, reducing callback field footprint with unified `onErrDone` handling.
+- [x] 3. Verified full test suite pass with `-count=1` across all 39 packages (`go test -count=1 goquorum.io/v2/...`).
+- [x] 4. Documented results in `tasks/todo.md`.
+
+## Phase 17 — Move Full storage/ and transport/ Packages into engine/adapter/
+
+### Context & Goals
+- Move entire `storage/` and `transport/` packages from `engine/` into `engine/adapter/storage` and `engine/adapter/transport`.
+- Eliminate root `engine/storage` and `engine/transport` folders.
+- Update all 20+ importing packages across the workspace to use `goquorum.io/v2/engine/adapter/storage` and `goquorum.io/v2/engine/adapter/transport`.
+- Verify `go test -count=1 goquorum.io/v2/...` and `go vet goquorum.io/v2/...` are 100% green.
+
+### What shipped, real and tested
+- [x] 1. Moved all files in `engine/storage/` (`storage.go`, `types.go`, `types_test.go`, `adapter.go`, `adapter_test.go`, `doc.go`) into `engine/adapter/storage/`.
+- [x] 2. Moved all files in `engine/transport/` (`transport.go`, `adapter.go`, `adapter_test.go`, `doc.go`) into `engine/adapter/transport/`.
+- [x] 3. Removed empty `engine/storage/` and `engine/transport/` directories.
+- [x] 4. Updated all import paths across `engine/`, `infra/`, `server/`, and `gateway/` packages.
+- [x] 5. Updated `server/app/server.go` composition root to cleanly use `storage` and `transport` packages from `engine/adapter/`.
+- [x] 6. Ran full test suite and `go vet` across all packages (`go test -count=1 goquorum.io/v2/...` & `go vet goquorum.io/v2/...`), verifying 100% green.
+- [x] 7. Documented results in `tasks/todo.md`.
+

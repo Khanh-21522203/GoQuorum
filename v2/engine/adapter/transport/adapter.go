@@ -7,8 +7,8 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
+	"goquorum.io/v2/engine/adapter/storage"
 	"goquorum.io/v2/engine/reactor"
-	"goquorum.io/v2/engine/storage"
 	"goquorum.io/v2/infra/pool"
 	"goquorum.io/v2/infra/transport/iouring"
 )
@@ -31,14 +31,12 @@ const (
 )
 
 type pendingRPC struct {
-	rpcType         pendingRPCType
-	timer           reactor.TimerID
-	onPutDone       func(error)
-	onGetDone       func(*storage.SiblingSet, error)
-	onHeartbeatDone func(error)
-	onMerkleDone    func([]byte, error)
-	onLeavingDone   func(error)
-	onGossipDone    func([]GossipEntry, error)
+	rpcType      pendingRPCType
+	timer        reactor.TimerID
+	onErrDone    func(error) // Used for rpcRemotePut, rpcHeartbeat, rpcNotifyLeaving
+	onGetDone    func(*storage.SiblingSet, error)
+	onMerkleDone func([]byte, error)
+	onGossipDone func([]GossipEntry, error)
 }
 
 // Adapter bridges the domain Transport port to the pure I/O iouring.Client
@@ -123,82 +121,102 @@ func (a *Adapter) OnFrame(id node.NodeID, hdr iouring.FrameHeader, body []byte) 
 	case rpcRemotePut:
 		var resp wire.RemotePutResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onPutDone(uErr)
+			if p.onErrDone != nil {
+				p.onErrDone(uErr)
+			}
 			return
 		}
-		p.onPutDone(wire.StatusCodeToError(resp.Status))
+		if p.onErrDone != nil {
+			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		}
 
 	case rpcRemoteGet:
 		var resp wire.RemoteGetResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onGetDone(nil, uErr)
+			if p.onGetDone != nil {
+				p.onGetDone(nil, uErr)
+			}
 			return
 		}
 		if resp.Status != wire.StatusOK {
-			p.onGetDone(nil, wire.StatusCodeToError(resp.Status))
+			if p.onGetDone != nil {
+				p.onGetDone(nil, wire.StatusCodeToError(resp.Status))
+			}
 			return
 		}
-		p.onGetDone(resp.Siblings, nil)
+		if p.onGetDone != nil {
+			p.onGetDone(resp.Siblings, nil)
+		}
 
 	case rpcHeartbeat:
 		var resp wire.HeartbeatResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onHeartbeatDone(uErr)
+			if p.onErrDone != nil {
+				p.onErrDone(uErr)
+			}
 			return
 		}
-		p.onHeartbeatDone(wire.StatusCodeToError(resp.Status))
+		if p.onErrDone != nil {
+			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		}
 
 	case rpcGetMerkleRoot:
 		var resp wire.GetMerkleRootResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onMerkleDone(nil, uErr)
+			if p.onMerkleDone != nil {
+				p.onMerkleDone(nil, uErr)
+			}
 			return
 		}
 		if resp.Status != wire.StatusOK {
-			p.onMerkleDone(nil, wire.StatusCodeToError(resp.Status))
+			if p.onMerkleDone != nil {
+				p.onMerkleDone(nil, wire.StatusCodeToError(resp.Status))
+			}
 			return
 		}
-		p.onMerkleDone(resp.Root, nil)
+		if p.onMerkleDone != nil {
+			p.onMerkleDone(resp.Root, nil)
+		}
 
 	case rpcNotifyLeaving:
 		var resp wire.NotifyLeavingResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onLeavingDone(uErr)
+			if p.onErrDone != nil {
+				p.onErrDone(uErr)
+			}
 			return
 		}
-		p.onLeavingDone(wire.StatusCodeToError(resp.Status))
+		if p.onErrDone != nil {
+			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		}
 
 	case rpcGossipExchange:
 		var resp wire.GossipExchangeResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			p.onGossipDone(nil, uErr)
+			if p.onGossipDone != nil {
+				p.onGossipDone(nil, uErr)
+			}
 			return
 		}
-		p.onGossipDone(resp.Entries, nil)
+		if p.onGossipDone != nil {
+			p.onGossipDone(resp.Entries, nil)
+		}
 	}
 }
 
 func (a *Adapter) dispatchError(p pendingRPC, err error) {
 	switch p.rpcType {
-	case rpcRemotePut:
-		if p.onPutDone != nil {
-			p.onPutDone(err)
+	case rpcRemotePut, rpcHeartbeat, rpcNotifyLeaving:
+		if p.onErrDone != nil {
+			p.onErrDone(err)
 		}
 	case rpcRemoteGet:
 		if p.onGetDone != nil {
 			p.onGetDone(nil, err)
 		}
-	case rpcHeartbeat:
-		if p.onHeartbeatDone != nil {
-			p.onHeartbeatDone(err)
-		}
 	case rpcGetMerkleRoot:
 		if p.onMerkleDone != nil {
 			p.onMerkleDone(nil, err)
-		}
-	case rpcNotifyLeaving:
-		if p.onLeavingDone != nil {
-			p.onLeavingDone(err)
 		}
 	case rpcGossipExchange:
 		if p.onGossipDone != nil {
@@ -239,7 +257,7 @@ func (a *Adapter) RemotePut(id node.NodeID, key []byte, siblings *storage.Siblin
 		if !ok {
 			return
 		}
-		cb := s.Value.onPutDone
+		cb := s.Value.onErrDone
 		a.slots.Release(slotID)
 		if cb != nil {
 			cb(fmt.Errorf("transport: remote put to %s: timed out waiting for reply", id))
@@ -249,7 +267,7 @@ func (a *Adapter) RemotePut(id node.NodeID, key []byte, siblings *storage.Siblin
 	slot.Value = pendingRPC{
 		rpcType:   rpcRemotePut,
 		timer:     timer,
-		onPutDone: done,
+		onErrDone: done,
 	}
 
 	req := wire.RemotePutRequest{Key: key, Siblings: siblings}
@@ -331,7 +349,7 @@ func (a *Adapter) Heartbeat(id node.NodeID, done func(error)) {
 		if !ok {
 			return
 		}
-		cb := s.Value.onHeartbeatDone
+		cb := s.Value.onErrDone
 		a.slots.Release(slotID)
 		if cb != nil {
 			cb(fmt.Errorf("transport: heartbeat to %s: timed out waiting for reply", id))
@@ -339,9 +357,9 @@ func (a *Adapter) Heartbeat(id node.NodeID, done func(error)) {
 	})
 
 	slot.Value = pendingRPC{
-		rpcType:         rpcHeartbeat,
-		timer:           timer,
-		onHeartbeatDone: done,
+		rpcType:   rpcHeartbeat,
+		timer:     timer,
+		onErrDone: done,
 	}
 
 	if err := a.client.Request(id, uint16(wire.MsgHeartbeatRequest), slotID, nil); err != nil {
@@ -393,7 +411,7 @@ func (a *Adapter) NotifyLeaving(id node.NodeID, done func(error)) {
 		if !ok {
 			return
 		}
-		cb := s.Value.onLeavingDone
+		cb := s.Value.onErrDone
 		a.slots.Release(slotID)
 		if cb != nil {
 			cb(fmt.Errorf("transport: notify leaving to %s: timed out waiting for reply", id))
@@ -401,9 +419,9 @@ func (a *Adapter) NotifyLeaving(id node.NodeID, done func(error)) {
 	})
 
 	slot.Value = pendingRPC{
-		rpcType:       rpcNotifyLeaving,
-		timer:         timer,
-		onLeavingDone: done,
+		rpcType:   rpcNotifyLeaving,
+		timer:     timer,
+		onErrDone: done,
 	}
 
 	if err := a.client.Request(id, uint16(wire.MsgNotifyLeavingRequest), slotID, nil); err != nil {
