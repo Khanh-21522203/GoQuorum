@@ -93,6 +93,22 @@ func (hr *HashRing) RemoveNode(id node.NodeID) error {
 	return nil
 }
 
+// GetNode retrieves a physical node by its ID.
+func (hr *HashRing) GetNode(id node.NodeID) (*node.Node, bool) {
+	n, ok := hr.nodes[id]
+	return n, ok
+}
+
+// UpdateNodeState updates the health state of a node on the ring.
+func (hr *HashRing) UpdateNodeState(id node.NodeID, state node.NodeState) error {
+	n, exists := hr.nodes[id]
+	if !exists {
+		return ErrNodeNotFound
+	}
+	n.UpdateState(state)
+	return nil
+}
+
 // GetPreferenceList returns up to n distinct physical nodes responsible for
 // key, walking the ring clockwise starting from key's hash position. If
 // fewer than n physical nodes exist, it returns all of them. It returns

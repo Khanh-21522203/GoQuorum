@@ -450,3 +450,69 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 3. Updated import paths across all packages (`coordinator`, `failuredetector`, `gossip`, `handoff`, `antientropy`, `readrepair`, `pebble`, `httprpc`, `admin`, `internal`, `server/app`) to single `"goquorum.io/v2/engine/adapter"`.
 - [x] 4. Ran full test suite (`go test -count=1 goquorum.io/v2/...`) and `go vet` (`go vet goquorum.io/v2/...`), verifying 100% green pass and 0 vet warnings.
 - [x] 5. Documented results in `tasks/todo.md`.
+
+## Phase 23 — Visual-First Documentation & Comment Refactor across Coordinator Layer
+
+### Context & Goals
+- Replace prose-heavy comments in `v2/engine/coordinator` and related engine subsystems (`readrepair`, `antientropy`, `failuredetector`, `handoff`, `gossip`) with visual ASCII architecture, lifecycle, and execution flow diagrams.
+- Shorten accompanying docstrings to non-obvious details only.
+- Verify 100% green test suite pass and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Rewrote [`v2/engine/coordinator/doc.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/doc.go) with visual ASCII subsystem composition diagram.
+- [x] 2. Rewrote [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go) with visual ASCII diagrams for:
+  - Coordinator lifecycle state machine (`[NotStarted] -> [Running] -> [Stopped]`)
+  - Quorum resolution state machine (`[requestAwaiting] -> [requestSucceeded]/[requestFailed]`)
+  - `Put` / `Delete` replica fan-out & ack resolution flow
+  - `Get` quorum read, maximal sibling merging, and read-repair flow
+  - Causal dominance rules for maximal sibling reconciliation
+- [x] 3. Rewrote comments in related coordinator-layer subsystems:
+  - [`v2/engine/readrepair/readrepair.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/readrepair/readrepair.go): ASCII repair flow diagram
+  - [`v2/engine/antientropy/antientropy.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/antientropy/antientropy.go): ASCII building/running/stopped lifecycle & exchange flow diagrams
+  - [`v2/engine/failuredetector/failuredetector.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/failuredetector/failuredetector.go): ASCII peer health transition state machine
+  - [`v2/engine/handoff/handoff.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/handoff/handoff.go): ASCII replay loop flow diagram
+  - [`v2/engine/gossip/gossip.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/gossip/gossip.go): ASCII round exchange & merge flow diagram
+- [x] 4. Ran full test suite (`go test -count=1 goquorum.io/v2/...`) and `go vet` (`go vet goquorum.io/v2/...`), verifying 100% green pass and 0 vet warnings.
+- [x] 5. Documented results in `tasks/todo.md`.
+
+## Phase 24 — Centralize State Machine & Master Reactor Timers in Coordinator with Event-Driven Subsystems
+
+### Context & Goals
+- Refactor worker subsystems (`failuredetector`, `gossip`, `handoff`, `antientropy`) to remove direct `reactor.Reactor` and internal `statemachine.Machine` dependencies.
+- Subsystems become pure protocol workers executing direct I/O via `adapter.Transport` / `adapter.Storage` and reporting domain events to handlers.
+- `Coordinator` becomes the single master controller:
+  - Encapsulates `MembershipManager` and acts as single source of truth for cluster state.
+  - Owns the central peer health / cluster state machine (`Active -> Degraded -> Failed`).
+  - Implements subsystem event handlers (`ProbeHandler`, `GossipHandler`).
+  - Owns the single `reactor.Reactor` instance, managing all periodic timers centrally.
+- Update tests across all packages to verify 100% pass and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Refactored [`engine/failuredetector`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/failuredetector/failuredetector.go):
+  - Defined `ProbeHandler` interface (`OnHeartbeatResult(nodeID, err)`).
+  - Removed `reactor`, timers, and internal `statemachine.Machine` from `FailureDetector`.
+  - Exposed `Probe(peerIDs []node.NodeID)` and `ProbeOne(targetID node.NodeID)`.
+  - Replaced test harness with pure synchronous unit tests in [`failuredetector_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/failuredetector/failuredetector_test.go).
+- [x] 2. Refactored [`engine/gossip`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/gossip/gossip.go):
+  - Defined `GossipHandler` interface (`OnGossipReceived(peerID, entries)`).
+  - Removed `reactor`, timers, and internal `statemachine.Machine` from `Gossip`.
+  - Exposed `Round(peers []node.NodeID, localEntries []adapter.GossipEntry)`.
+  - Replaced test harness with pure synchronous unit tests in [`gossip_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/gossip/gossip_test.go).
+- [x] 3. Refactored [`engine/handoff`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/handoff/handoff.go):
+  - Removed `reactor`, timers, and internal `statemachine.Machine` from `HintedHandoff`.
+  - Exposed `Replay(activePeers []node.NodeID)` and `StoreHint(targetNodeID, key, siblings)`.
+  - Replaced test harness with pure synchronous unit tests in [`handoff_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/handoff/handoff_test.go).
+- [x] 4. Refactored [`engine/antientropy`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/antientropy/antientropy.go):
+  - Removed `reactor`, timers, and internal `statemachine.Machine` from `AntiEntropy`.
+  - Exposed `Build() error`, `ScanTick(peerIDs []node.NodeID)`, `TriggerWithPeer(nodeID)`, and `SyncWithPeers(peers, done)`.
+  - Replaced test harness with pure synchronous unit tests in [`antientropy_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/antientropy/antientropy_test.go).
+- [x] 5. Refactored [`engine/coordinator`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go):
+  - Encapsulated `MembershipManager` and exposed `Membership()`, `GetClusterView()`, `GetPeers()`, and `GetActivePeers()`.
+  - Implemented `ProbeHandler` and `GossipHandler`, driving the central peer state machine (`Active -> Degraded -> Failed`) and updating membership + hash ring upon heartbeat / gossip events.
+  - Centralized master reactor timers in `Start()` (`heartbeatTimer`, `gossipTimer`, `handoffTimer`, `antiEntropyTimer`) and cancelled in `Stop()`.
+  - Folds hint writes on failed replica writes via `handoff.StoreHint`.
+  - Maintained 100% passing tests in [`coordinator_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator_test.go).
+- [x] 6. Verified seamless composition in [`server/app/server.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/app/server.go) and service APIs ([`server/api/admin.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/api/admin.go), [`server/api/internal.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/api/internal.go)).
+- [x] 7. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+
+

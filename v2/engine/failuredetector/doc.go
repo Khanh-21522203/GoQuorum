@@ -1,5 +1,2 @@
-// Package failuredetector monitors peer liveness via heartbeats and
-// reports node failure/recovery through exported callbacks.
-//
-// (v1: internal/cluster/failure_detector.go)
+// Package failuredetector provides a protocol worker for probing peer liveness via Transport.
 package failuredetector
