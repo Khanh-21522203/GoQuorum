@@ -386,3 +386,67 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 6. Ran full test suite and `go vet` across all packages (`go test -count=1 goquorum.io/v2/...` & `go vet goquorum.io/v2/...`), verifying 100% green.
 - [x] 7. Documented results in `tasks/todo.md`.
 
+## Phase 18 — Move Low-Level KVStore Contract to infra/storage
+
+### Context & Goals
+- Define low-level `KVStore` interface in `infra/storage/store.go` (IO Layer).
+- Update `engine/adapter/storage` to consume `infrastorage.KVStore`.
+- Verify `journal.Store` implements `infrastorage.KVStore`.
+- Verify full test suite pass and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Created `v2/infra/storage/store.go` with `KVStore` interface and callback type aliases.
+- [x] 2. Updated `engine/adapter/storage/storage.go` to alias `KVStore` from `infra/storage`.
+- [x] 3. Ran full test suite and `go vet` across all workspace modules (`go test -count=1 goquorum.io/v2/...` & `go vet goquorum.io/v2/...`), verifying 100% green.
+- [x] 4. Documented results in `tasks/todo.md`.
+
+## Phase 20 — Purge Legacy Individual Closure Hooks & Wrapper Helpers from journal.Store
+
+### Context & Goals
+- Remove legacy individual `On...` closure fields (`OnReadComplete`, `OnWriteComplete`, `OnScanComplete`, `OnCompactComplete`, `OnStorageError`) from `journal.Store`.
+- Remove legacy `SetOn...` methods and intermediate `notify...` helper wrappers from `journal.Store`.
+- Keep ONLY `handler StoreHandler` and `SetHandler(h StoreHandler)` with direct call-site dispatch `if s.handler != nil { s.handler.On...(...) }` (exact replica of `transport.ClientHandler`).
+- Update `journal/store_test.go` to use `StoreHandler`.
+- Verify 100% green test suite pass and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Cleaned `v2/infra/storage/journal/store.go` to remove all legacy `On...` fields, `SetOn...` methods, and `notify...` wrappers; all events now invoke `if s.handler != nil { s.handler.On...(...) }` directly at call sites.
+- [x] 2. Updated `engine/adapter/storage.Adapter` handler methods to use `defer a.slots.Release(...)` and invoke `slot.Value.on...` directly without temp variables.
+- [x] 3. Updated `v2/infra/storage/journal/store_test.go` so `testStore` implements `StoreHandler` and registers via `store.SetHandler(ts)`.
+- [x] 4. Ran full test suite and `go vet` across all packages (`go test -count=1 goquorum.io/v2/...` & `go vet goquorum.io/v2/...`), verifying 100% green.
+- [x] 5. Documented results in `tasks/todo.md`.
+
+## Phase 21 — Update Network Transport Adapter to Release Slots at the End
+
+### Context & Goals
+- Refactor `engine/adapter/transport.Adapter`'s `OnFrame` and timeout handlers to use `defer a.slots.Release(...)`.
+- Access callback functions directly through `slot.Value.on...` without temporary local variable assignments.
+- Verify 100% green test suite pass across all packages and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Updated `engine/adapter/transport/adapter.go`'s `OnFrame` to use `defer a.slots.Release(hdr.CorrelationID)` and invoke `slot.Value.on...` directly.
+- [x] 2. Updated timeout callbacks (`RemotePut`, `RemoteGet`, `Heartbeat`, `GetMerkleRoot`, `NotifyLeaving`, `GossipExchange`) to use `defer a.slots.Release(slotID)` and invoke `s.Value.on...` directly.
+- [x] 3. Ran full test suite and `go vet` across all packages (`go test -count=1 goquorum.io/v2/...` & `go vet goquorum.io/v2/...`), verifying 100% green.
+- [x] 4. Documented results in `tasks/todo.md`.
+
+## Phase 22 — Consolidate Storage & Transport into single engine/adapter Package
+
+### Context & Goals
+- Merge `engine/adapter/storage` and `engine/adapter/transport` directly into `package adapter` (`v2/engine/adapter`).
+- Remove subdirectories `engine/adapter/storage/` and `engine/adapter/transport/`.
+- Update all importing packages across the workspace to import single `"goquorum.io/v2/engine/adapter"`.
+- Verify 100% green test suite pass across all 39 packages and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Consolidated `engine/adapter/storage` and `engine/adapter/transport` into single `package adapter` (`v2/engine/adapter`):
+  - `storage.go`: `Storage` interface, `StorageAdapter` struct, `NewStorageAdapter`, `StoreHandler` implementation.
+  - `storage_types.go`: `Sibling`, `SiblingSet`, `Reconcile`, `ScanFunc`, `StorageStats` (with alias `Stats`).
+  - `storage_types_test.go`: CRDT sibling set resolution & truncation tests.
+  - `storage_test.go`: Full Put/Get/Delete/Scan/Compact tests for `StorageAdapter`.
+  - `transport.go`: `Transport` interface, `GossipEntry` alias, `TransportAdapter` struct, `NewTransportAdapter`, `ClientHandler` implementation.
+  - `transport_test.go`: Full RPC/timeout/hook tests for `TransportAdapter`.
+  - `doc.go`: Package documentation.
+- [x] 2. Removed subdirectories `v2/engine/adapter/storage` and `v2/engine/adapter/transport`.
+- [x] 3. Updated import paths across all packages (`coordinator`, `failuredetector`, `gossip`, `handoff`, `antientropy`, `readrepair`, `pebble`, `httprpc`, `admin`, `internal`, `server/app`) to single `"goquorum.io/v2/engine/adapter"`.
+- [x] 4. Ran full test suite (`go test -count=1 goquorum.io/v2/...`) and `go vet` (`go vet goquorum.io/v2/...`), verifying 100% green pass and 0 vet warnings.
+- [x] 5. Documented results in `tasks/todo.md`.

@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/reactor"
 )
@@ -122,10 +121,10 @@ func (ft *fakeTransport) Heartbeat(id node.NodeID, done func(error)) {
 	done(err)
 }
 
-func (ft *fakeTransport) RemotePut(node.NodeID, []byte, *storage.SiblingSet, func(error)) {
+func (ft *fakeTransport) RemotePut(node.NodeID, []byte, *adapter.SiblingSet, func(error)) {
 	panic("not used by these tests")
 }
-func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*storage.SiblingSet, error)) {
+func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*adapter.SiblingSet, error)) {
 	panic("not used by these tests")
 }
 func (ft *fakeTransport) GetMerkleRoot(node.NodeID, func([]byte, error)) {
@@ -134,12 +133,13 @@ func (ft *fakeTransport) GetMerkleRoot(node.NodeID, func([]byte, error)) {
 func (ft *fakeTransport) NotifyLeaving(node.NodeID, func(error)) {
 	panic("not used by these tests")
 }
-func (ft *fakeTransport) GossipExchange(node.NodeID, []transport.GossipEntry, func([]transport.GossipEntry, error)) {
+func (ft *fakeTransport) GossipExchange(node.NodeID, []adapter.GossipEntry, func([]adapter.GossipEntry, error)) {
 	panic("not used by these tests")
 }
-func (ft *fakeTransport) Close() error { return nil }
+func (ft *fakeTransport) Dial(node.NodeID, string) error { return nil }
+func (ft *fakeTransport) Close() error                   { return nil }
 
-var _ transport.Transport = (*fakeTransport)(nil)
+var _ adapter.Transport = (*fakeTransport)(nil)
 
 const testInterval = 5 * time.Millisecond
 

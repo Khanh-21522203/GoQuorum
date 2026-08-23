@@ -1,4 +1,4 @@
-package storage
+package adapter
 
 import (
 	"bytes"
@@ -16,14 +16,17 @@ type SiblingSet = wire.SiblingSet
 // stops the scan early.
 type ScanFunc func(key []byte, siblings *SiblingSet) bool
 
-// Stats reports point-in-time storage engine statistics.
-type Stats struct {
+// StorageStats reports point-in-time storage engine statistics.
+type StorageStats struct {
 	KeyCount        int64
 	SizeBytes       uint64
 	L0FileCount     int64
 	CompactionCount int64
 	WALBytesWritten uint64
 }
+
+// Stats is an alias for StorageStats for backward compatibility.
+type Stats = StorageStats
 
 // Reconcile merges two sibling sets, keeping only the causally maximal (undominated) siblings.
 func Reconcile(a, b *SiblingSet) *SiblingSet {

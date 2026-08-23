@@ -6,8 +6,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 )
@@ -45,8 +44,9 @@ func (f *fakeSource) Wake() error {
 
 func (f *fakeSource) Close() error { return nil }
 
-// runInBackground starts r.Run on a background goroutine and arranges for
-// it to be stopped and joined at test cleanup.
+// runInBackground drives r.Run on its own goroutine for the duration of a
+// test; only test code spans goroutines, product code stays single
+// threaded.
 func runInBackground(t *testing.T, r *reactor.Reactor) {
 	t.Helper()
 	errCh := make(chan error, 1)
@@ -82,7 +82,7 @@ type remotePutCall struct {
 	key []byte
 }
 
-// fakeTransport is a transport.Transport whose RemotePut behavior is
+// fakeTransport is an adapter.Transport whose RemotePut behavior is
 // controlled by the test via err: every RemotePut call is recorded and its
 // done callback is invoked synchronously with the configured err, matching
 // the real done-invoked-from-the-issuing-goroutine contract.
@@ -91,12 +91,12 @@ type fakeTransport struct {
 	err   error
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
 	f.calls = append(f.calls, remotePutCall{id: id, key: append([]byte(nil), key...)})
 	done(f.err)
 }
 
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*storage.SiblingSet, error)) {
+func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
 	done(nil, nil)
 }
 
@@ -106,11 +106,12 @@ func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) 
 
 func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error)) { done(nil) }
 
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []transport.GossipEntry, done func([]transport.GossipEntry, error)) {
+func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
 	done(nil, nil)
 }
 
-func (f *fakeTransport) Close() error { return nil }
+func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
+func (f *fakeTransport) Close() error                           { return nil }
 
 func newTestManager() *membership.MembershipManager {
 	return membership.NewMembershipManager(membership.Config{NodeID: "local"}, "test")
@@ -131,10 +132,10 @@ func TestStoreHint_HintCountReflectsStoredHints(t *testing.T) {
 		t.Fatalf("HintCount() = %d before any StoreHint, want 0", got)
 	}
 
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
-	if err := hh.StoreHint("target", []byte("k2"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k2"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 
@@ -148,7 +149,7 @@ func TestStoreHint_EvictsOldestOnceAtCapacity(t *testing.T) {
 
 	for i := 0; i < maxHintsPerNode; i++ {
 		key := []byte{byte(i), byte(i >> 8)}
-		if err := hh.StoreHint("target", key, &storage.SiblingSet{}); err != nil {
+		if err := hh.StoreHint("target", key, &adapter.SiblingSet{}); err != nil {
 			t.Fatalf("StoreHint() error = %v", err)
 		}
 	}
@@ -158,7 +159,7 @@ func TestStoreHint_EvictsOldestOnceAtCapacity(t *testing.T) {
 
 	// One more hint should evict the oldest (key for i=0) rather than grow
 	// past capacity.
-	if err := hh.StoreHint("target", []byte("overflow"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("overflow"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 	if got := hh.HintCount("target"); got != maxHintsPerNode {
@@ -185,7 +186,7 @@ func TestReplay_DeliversToActiveTargetAndClearsOnSuccess(t *testing.T) {
 		mm.UpdatePeerStatus("target", membership.NodeStatusActive)
 		hh.Start()
 	})
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 
@@ -214,7 +215,7 @@ func TestReplay_FailedDeliveryKeepsHintForNextTick(t *testing.T) {
 		mm.UpdatePeerStatus("target", membership.NodeStatusActive)
 		hh.Start()
 	})
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 
@@ -249,7 +250,7 @@ func TestReplay_SkipsInactiveTarget(t *testing.T) {
 
 	// "target" is never marked active.
 	runSync(r, func() { hh.Start() })
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 
@@ -274,7 +275,7 @@ func TestReplay_DropsHintOlderThanMaxAge(t *testing.T) {
 		mm.UpdatePeerStatus("target", membership.NodeStatusActive)
 		hh.Start()
 	})
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 	// Backdate the hint past maxHintAge.
@@ -301,7 +302,7 @@ func TestStop_HaltsFurtherReplayAttempts(t *testing.T) {
 		mm.UpdatePeerStatus("target", membership.NodeStatusActive)
 		hh.Start()
 	})
-	if err := hh.StoreHint("target", []byte("k1"), &storage.SiblingSet{}); err != nil {
+	if err := hh.StoreHint("target", []byte("k1"), &adapter.SiblingSet{}); err != nil {
 		t.Fatalf("StoreHint() error = %v", err)
 	}
 	runSync(r, hh.Stop)

@@ -10,8 +10,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/reactor"
@@ -107,37 +106,37 @@ func waitForCond(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatal("waitForCond: condition never became true")
 }
 
-// ── memStorage: controllable storage.Storage ───────────────────────────────
+// ── memStorage: controllable adapter.Storage ───────────────────────────────
 
 type memStorage struct {
 	mu      sync.Mutex
-	data    map[string]*storage.SiblingSet
+	data    map[string]*adapter.SiblingSet
 	localID node.NodeID
 	scanErr error
 }
 
 func newMemStorage(id node.NodeID) *memStorage {
-	return &memStorage{data: make(map[string]*storage.SiblingSet), localID: id}
+	return &memStorage{data: make(map[string]*adapter.SiblingSet), localID: id}
 }
 
-func (fs *memStorage) put(key []byte, ss *storage.SiblingSet) {
+func (fs *memStorage) put(key []byte, ss *adapter.SiblingSet) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	fs.data[string(key)] = ss
 }
 
-func (fs *memStorage) Get(key []byte, done func(*storage.SiblingSet, error)) {
+func (fs *memStorage) Get(key []byte, done func(*adapter.SiblingSet, error)) {
 	fs.mu.Lock()
 	ss := fs.data[string(key)]
 	fs.mu.Unlock()
 	done(ss, nil)
 }
 
-func (fs *memStorage) GetRaw(key []byte, done func(*storage.SiblingSet, error)) {
+func (fs *memStorage) GetRaw(key []byte, done func(*adapter.SiblingSet, error)) {
 	fs.Get(key, done)
 }
 
-func (fs *memStorage) Put(key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (fs *memStorage) Put(key []byte, siblings *adapter.SiblingSet, done func(error)) {
 	fs.put(key, siblings)
 	done(nil)
 }
@@ -151,7 +150,7 @@ func (fs *memStorage) Delete(key []byte, _ vclock.VectorClock, done func(error))
 
 // Scan visits keys in sorted order so tests get deterministic behavior, and
 // fails outright with scanErr if the test configured one.
-func (fs *memStorage) Scan(_, _ []byte, fn storage.ScanFunc, done func(error)) {
+func (fs *memStorage) Scan(_, _ []byte, fn adapter.ScanFunc, done func(error)) {
 	fs.mu.Lock()
 	if fs.scanErr != nil {
 		err := fs.scanErr
@@ -166,7 +165,7 @@ func (fs *memStorage) Scan(_, _ []byte, fn storage.ScanFunc, done func(error)) {
 	sort.Strings(keys)
 	type kv struct {
 		key []byte
-		ss  *storage.SiblingSet
+		ss  *adapter.SiblingSet
 	}
 	items := make([]kv, 0, len(keys))
 	for _, k := range keys {
@@ -182,13 +181,13 @@ func (fs *memStorage) Scan(_, _ []byte, fn storage.ScanFunc, done func(error)) {
 	done(nil)
 }
 
-func (fs *memStorage) LocalNodeID() node.NodeID { return fs.localID }
-func (fs *memStorage) Stats() storage.Stats     { return storage.Stats{} }
-func (fs *memStorage) Close() error             { return nil }
+func (fs *memStorage) LocalNodeID() node.NodeID    { return fs.localID }
+func (fs *memStorage) Stats() adapter.StorageStats { return adapter.StorageStats{} }
+func (fs *memStorage) Close() error                { return nil }
 
-var _ storage.Storage = (*memStorage)(nil)
+var _ adapter.Storage = (*memStorage)(nil)
 
-// ── fakeTransport: controllable transport.Transport ─────────────────────────
+// ── fakeTransport: controllable adapter.Transport ─────────────────────────
 
 type fakeTransport struct {
 	mu        sync.Mutex
@@ -235,7 +234,7 @@ func (ft *fakeTransport) getRootCallCount() int {
 	return ft.rootCalls
 }
 
-func (ft *fakeTransport) RemotePut(id node.NodeID, key []byte, _ *storage.SiblingSet, done func(error)) {
+func (ft *fakeTransport) RemotePut(id node.NodeID, key []byte, _ *adapter.SiblingSet, done func(error)) {
 	ft.mu.Lock()
 	ft.putCalls = append(ft.putCalls, putCall{peer: id, key: append([]byte(nil), key...)})
 	err := ft.putErr
@@ -243,7 +242,7 @@ func (ft *fakeTransport) RemotePut(id node.NodeID, key []byte, _ *storage.Siblin
 	done(err)
 }
 
-func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*storage.SiblingSet, error)) {
+func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*adapter.SiblingSet, error)) {
 	panic("not used by these tests")
 }
 
@@ -264,13 +263,14 @@ func (ft *fakeTransport) NotifyLeaving(node.NodeID, func(error)) {
 	panic("not used by these tests")
 }
 
-func (ft *fakeTransport) GossipExchange(node.NodeID, []transport.GossipEntry, func([]transport.GossipEntry, error)) {
+func (ft *fakeTransport) GossipExchange(node.NodeID, []adapter.GossipEntry, func([]adapter.GossipEntry, error)) {
 	panic("not used by these tests")
 }
 
-func (ft *fakeTransport) Close() error { return nil }
+func (ft *fakeTransport) Dial(node.NodeID, string) error { return nil }
+func (ft *fakeTransport) Close() error                   { return nil }
 
-var _ transport.Transport = (*fakeTransport)(nil)
+var _ adapter.Transport = (*fakeTransport)(nil)
 
 // ── test wiring helpers ──────────────────────────────────────────────────
 

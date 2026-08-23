@@ -6,8 +6,7 @@ import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/antientropy"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
@@ -87,15 +86,15 @@ type readRequest struct {
 	successCount int
 	failureCount int
 	responses    []readrepair.ReplicaRead // Every response collected so far, in arrival order.
-	resolve      func([]storage.Sibling, error)
+	resolve      func([]adapter.Sibling, error)
 	timerID      reactor.TimerID
 	machine      *statemachine.Machine[requestState, requestTrigger]
 }
 
 // Coordinator orchestrates quorum reads and writes across a key's
 // preference list of replicas, composing the hash ring, membership view,
-// read-repair, and anti-entropy subsystems on top of the storage.Storage
-// and transport.Transport ports.
+// read-repair, and anti-entropy subsystems on top of the adapter.Storage
+// and adapter.Transport ports.
 //
 // Every exported method bounces onto reactor's single goroutine via
 // PostFunc before touching any Coordinator-owned state, so the maps below
@@ -104,8 +103,8 @@ type readRequest struct {
 type Coordinator struct {
 	nodeID     node.NodeID
 	ring       *hashring.HashRing
-	storage    storage.Storage
-	transport  transport.Transport
+	storage    adapter.Storage
+	transport  adapter.Transport
 	membership *membership.MembershipManager
 	reactor    *reactor.Reactor
 
@@ -131,8 +130,8 @@ type Coordinator struct {
 func NewCoordinator(
 	id node.NodeID,
 	ring *hashring.HashRing,
-	store storage.Storage,
-	tr transport.Transport,
+	store adapter.Storage,
+	tr adapter.Transport,
 	mm *membership.MembershipManager,
 	rt *reactor.Reactor,
 	cfg config.QuorumConfig,
@@ -208,8 +207,8 @@ func (c *Coordinator) doPut(key string, value []byte, causal vclock.VectorClock,
 		expiresAt = time.Now().Unix() + opts[0].TTLSeconds
 	}
 
-	siblingSet := &storage.SiblingSet{
-		Siblings: []storage.Sibling{{
+	siblingSet := &adapter.SiblingSet{
+		Siblings: []adapter.Sibling{{
 			Value:     value,
 			VClock:    tick,
 			Timestamp: time.Now().Unix(),
@@ -245,13 +244,13 @@ func (c *Coordinator) doPut(key string, value []byte, causal vclock.VectorClock,
 
 // Get performs a quorum read of key, merging sibling sets from R replicas
 // and triggering read repair on stale replicas.
-func (c *Coordinator) Get(key string, done func([]storage.Sibling, error)) {
+func (c *Coordinator) Get(key string, done func([]adapter.Sibling, error)) {
 	c.reactor.PostFunc(func() {
 		c.doGet(key, done)
 	})
 }
 
-func (c *Coordinator) doGet(key string, done func([]storage.Sibling, error)) {
+func (c *Coordinator) doGet(key string, done func([]adapter.Sibling, error)) {
 	prefList, err := c.ring.GetPreferenceList(key, c.quorumConfig.N)
 	if err != nil {
 		done(nil, err)
@@ -263,7 +262,7 @@ func (c *Coordinator) doGet(key string, done func([]storage.Sibling, error)) {
 
 	for _, nodeID := range prefList {
 		reqID, nid := req.id, nodeID
-		cb := func(ss *storage.SiblingSet, err error) { c.onReadReplicaResult(reqID, nid, ss, err) }
+		cb := func(ss *adapter.SiblingSet, err error) { c.onReadReplicaResult(reqID, nid, ss, err) }
 		if nodeID == c.nodeID {
 			c.storage.Get(keyBytes, cb)
 		} else {
@@ -284,8 +283,8 @@ func (c *Coordinator) doDelete(key string, causal vclock.VectorClock, done func(
 	tick := causal.Copy()
 	tick.Tick(c.nodeID)
 
-	siblingSet := &storage.SiblingSet{
-		Siblings: []storage.Sibling{{
+	siblingSet := &adapter.SiblingSet{
+		Siblings: []adapter.Sibling{{
 			Tombstone: true,
 			VClock:    tick,
 			Timestamp: time.Now().Unix(),
@@ -420,7 +419,7 @@ func (c *Coordinator) onWriteTimeout(reqID uint64) {
 
 // newReadRequest builds and registers the per-request machine for a Get's
 // fan-out, and arms its client timeout.
-func (c *Coordinator) newReadRequest(key []byte, total, quorum int, resolve func([]storage.Sibling, error)) *readRequest {
+func (c *Coordinator) newReadRequest(key []byte, total, quorum int, resolve func([]adapter.Sibling, error)) *readRequest {
 	req := &readRequest{id: c.nextRequestID(), key: key, total: total, quorum: quorum, resolve: resolve}
 
 	req.machine = statemachine.New(requestAwaiting, []statemachine.Edge[requestState, requestTrigger]{
@@ -474,7 +473,7 @@ func (c *Coordinator) newReadRequest(key []byte, total, quorum int, resolve func
 }
 
 // onReadReplicaResult processes one replica's Get response.
-func (c *Coordinator) onReadReplicaResult(reqID uint64, nodeID node.NodeID, ss *storage.SiblingSet, err error) {
+func (c *Coordinator) onReadReplicaResult(reqID uint64, nodeID node.NodeID, ss *adapter.SiblingSet, err error) {
 	req, ok := c.readRequests[reqID]
 	if !ok {
 		return
@@ -523,8 +522,8 @@ func (c *Coordinator) onReadTimeout(reqID uint64) {
 // eventually-consistent store. Tombstones and expired entries are kept
 // here so the dominance math sees the whole picture; callers that want the
 // user-visible view should filter with visibleSiblings.
-func mergeMaximalSiblings(responses []readrepair.ReplicaRead) []storage.Sibling {
-	var all []storage.Sibling
+func mergeMaximalSiblings(responses []readrepair.ReplicaRead) []adapter.Sibling {
+	var all []adapter.Sibling
 	for _, r := range responses {
 		if r.Error != nil || r.SiblingSet == nil {
 			continue
@@ -532,7 +531,7 @@ func mergeMaximalSiblings(responses []readrepair.ReplicaRead) []storage.Sibling 
 		all = append(all, r.SiblingSet.Siblings...)
 	}
 
-	maximal := make([]storage.Sibling, 0, len(all))
+	maximal := make([]adapter.Sibling, 0, len(all))
 	for i, s := range all {
 		dominated := false
 		for j, other := range all {
@@ -563,9 +562,9 @@ func mergeMaximalSiblings(responses []readrepair.ReplicaRead) []storage.Sibling 
 
 // visibleSiblings filters tombstones and TTL-expired siblings out of a
 // merged set, for the value actually returned to a Get caller.
-func visibleSiblings(merged []storage.Sibling) []storage.Sibling {
+func visibleSiblings(merged []adapter.Sibling) []adapter.Sibling {
 	now := time.Now().Unix()
-	visible := make([]storage.Sibling, 0, len(merged))
+	visible := make([]adapter.Sibling, 0, len(merged))
 	for _, s := range merged {
 		if s.Tombstone {
 			continue

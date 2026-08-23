@@ -28,11 +28,48 @@ type testStore struct {
 	store *Store
 	r     *reactor.Reactor
 
-	nextReqID uint64
-	reads     map[uint64]chan readRes
-	writes    map[uint64]chan error
-	scans     map[uint64]chan scanRes
-	compacts  map[uint64]chan compactRes
+	nextReqID      uint64
+	reads          map[uint64]chan readRes
+	writes         map[uint64]chan error
+	scans          map[uint64]chan scanRes
+	compacts       map[uint64]chan compactRes
+	onStorageError func(err error)
+}
+
+var _ StoreHandler = (*testStore)(nil)
+
+func (ts *testStore) OnReadComplete(reqID uint64, key, val []byte, err error) {
+	if ch, ok := ts.reads[reqID]; ok {
+		delete(ts.reads, reqID)
+		ch <- readRes{val: val, err: err}
+	}
+}
+
+func (ts *testStore) OnWriteComplete(reqID uint64, key []byte, err error) {
+	if ch, ok := ts.writes[reqID]; ok {
+		delete(ts.writes, reqID)
+		ch <- err
+	}
+}
+
+func (ts *testStore) OnScanComplete(scanID uint64, items []ScanEntry, err error) {
+	if ch, ok := ts.scans[scanID]; ok {
+		delete(ts.scans, scanID)
+		ch <- scanRes{items: items, err: err}
+	}
+}
+
+func (ts *testStore) OnCompactComplete(compactID uint64, stats CompactStats, err error) {
+	if ch, ok := ts.compacts[compactID]; ok {
+		delete(ts.compacts, compactID)
+		ch <- compactRes{stats: stats, err: err}
+	}
+}
+
+func (ts *testStore) OnStorageError(err error) {
+	if ts.onStorageError != nil {
+		ts.onStorageError(err)
+	}
 }
 
 type readRes struct {
@@ -69,34 +106,7 @@ func openTestStoreWithOptions(t testing.TB, rt *ioruntime.Runtime, opts Options)
 		scans:    make(map[uint64]chan scanRes),
 		compacts: make(map[uint64]chan compactRes),
 	}
-
-	store.OnReadComplete = func(reqID uint64, key, val []byte, err error) {
-		if ch, ok := ts.reads[reqID]; ok {
-			delete(ts.reads, reqID)
-			ch <- readRes{val: val, err: err}
-		}
-	}
-
-	store.OnWriteComplete = func(reqID uint64, key []byte, err error) {
-		if ch, ok := ts.writes[reqID]; ok {
-			delete(ts.writes, reqID)
-			ch <- err
-		}
-	}
-
-	store.OnScanComplete = func(scanID uint64, items []ScanEntry, err error) {
-		if ch, ok := ts.scans[scanID]; ok {
-			delete(ts.scans, scanID)
-			ch <- scanRes{items: items, err: err}
-		}
-	}
-
-	store.OnCompactComplete = func(compactID uint64, stats CompactStats, err error) {
-		if ch, ok := ts.compacts[compactID]; ok {
-			delete(ts.compacts, compactID)
-			ch <- compactRes{stats: stats, err: err}
-		}
-	}
+	store.SetHandler(ts)
 
 	r := reactor.New(rt)
 	r.SetEventHandler(func(ev reactor.Event) { store.HandleCompletion(ev) })
@@ -376,7 +386,7 @@ func TestStore_OnStorageError_FiresOnDiskError(t *testing.T) {
 
 	var hookErr error
 	hookFired := make(chan struct{}, 1)
-	ts.store.OnStorageError = func(err error) {
+	ts.onStorageError = func(err error) {
 		hookErr = err
 		select {
 		case hookFired <- struct{}{}:

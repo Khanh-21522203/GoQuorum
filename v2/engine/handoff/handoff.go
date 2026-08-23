@@ -4,8 +4,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/statemachine"
@@ -27,7 +26,7 @@ const hintReplayInterval = 30 * time.Second
 // node.
 type Hint struct {
 	Key       []byte
-	Siblings  *storage.SiblingSet
+	Siblings  *adapter.SiblingSet
 	CreatedAt time.Time
 }
 
@@ -73,7 +72,7 @@ func newLifecycle() *statemachine.Machine[lifecycleState, lifecycleTrigger] {
 type HintedHandoff struct {
 	hints      map[node.NodeID][]*Hint
 	membership *membership.MembershipManager
-	transport  transport.Transport
+	transport  adapter.Transport
 	nodeID     node.NodeID
 	reactor    *reactor.Reactor
 	lifecycle  *statemachine.Machine[lifecycleState, lifecycleTrigger]
@@ -82,7 +81,7 @@ type HintedHandoff struct {
 
 // NewHintedHandoff creates a hinted-handoff buffer for the local node,
 // driven by r.
-func NewHintedHandoff(mm *membership.MembershipManager, tr transport.Transport, nodeID node.NodeID, r *reactor.Reactor) *HintedHandoff {
+func NewHintedHandoff(mm *membership.MembershipManager, tr adapter.Transport, nodeID node.NodeID, r *reactor.Reactor) *HintedHandoff {
 	return &HintedHandoff{
 		hints:      make(map[node.NodeID][]*Hint),
 		membership: mm,
@@ -114,7 +113,7 @@ func (hh *HintedHandoff) Stop() {
 // StoreHint buffers a write for targetNodeID, to be replayed once that
 // node is reachable again. It evicts the oldest hint for that node if
 // already at capacity.
-func (hh *HintedHandoff) StoreHint(targetNodeID node.NodeID, key []byte, siblings *storage.SiblingSet) error {
+func (hh *HintedHandoff) StoreHint(targetNodeID node.NodeID, key []byte, siblings *adapter.SiblingSet) error {
 	hint := &Hint{
 		Key:       append([]byte(nil), key...),
 		Siblings:  siblings,

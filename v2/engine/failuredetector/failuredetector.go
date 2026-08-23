@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
@@ -51,10 +51,7 @@ const (
 )
 
 // peerEntry bundles a tracked peer's heartbeat bookkeeping with the state
-// machine that owns its current node.NodeState. The machine is the single
-// source of truth for State; health carries only the auxiliary heartbeat
-// metadata (timing, counts, latency) that the state machine's discrete
-// states can't express.
+// machine that owns its current node.NodeState.
 type peerEntry struct {
 	health  *node.NodeHealth
 	machine *statemachine.Machine[node.NodeState, peerTrigger]
@@ -68,7 +65,7 @@ type FailureDetector struct {
 	config     config.FailureDetectorConfig
 	peers      map[node.NodeID]*peerEntry
 	membership *membership.MembershipManager
-	transport  transport.Transport
+	transport  adapter.Transport
 	reactor    *reactor.Reactor
 
 	lifecycle *statemachine.Machine[lifecycleState, lifecycleTrigger]
@@ -85,7 +82,7 @@ type FailureDetector struct {
 // membership view, transport, and reactor. Heartbeats are scheduled on rc,
 // so Start/Stop/tick must run on rc's own goroutine, same as any other
 // reactor-owned state.
-func NewFailureDetector(cfg config.FailureDetectorConfig, mm *membership.MembershipManager, tr transport.Transport, rc *reactor.Reactor) *FailureDetector {
+func NewFailureDetector(cfg config.FailureDetectorConfig, mm *membership.MembershipManager, tr adapter.Transport, rc *reactor.Reactor) *FailureDetector {
 	return &FailureDetector{
 		config:     cfg,
 		peers:      make(map[node.NodeID]*peerEntry),

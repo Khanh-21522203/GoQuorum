@@ -6,8 +6,7 @@ import (
 	"fmt"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/reactor"
@@ -43,7 +42,8 @@ const (
 	lifecycleRunning
 	// lifecycleStopped is terminal; Stop does not support being
 	// restarted via Start (matching the fixed-table design of
-	// statemachine.Machine, which has no forced-state escape hatch).
+	// statemachine.Machine which operates on immutable, acyclic-by-convention
+	// transitions).
 	lifecycleStopped
 )
 
@@ -72,9 +72,9 @@ func newLifecycle() *statemachine.Machine[lifecycleState, lifecycleTrigger] {
 // incrementally as keys are written or deleted.
 type AntiEntropy struct {
 	nodeID     node.NodeID
-	storage    storage.Storage
+	storage    adapter.Storage
 	ring       *hashring.HashRing
-	transport  transport.Transport
+	transport  adapter.Transport
 	merkleTree *MerkleTree
 	config     config.AntiEntropyConfig
 
@@ -87,7 +87,7 @@ type AntiEntropy struct {
 // Merkle tree is allocated immediately (empty) so GetMerkleRoot,
 // OnKeyUpdate, and OnKeyDelete are safe to call right away; Start performs
 // the real initial scan that populates it. Call SetReactor before Start.
-func NewAntiEntropy(nodeID node.NodeID, store storage.Storage, ring *hashring.HashRing, tr transport.Transport, cfg config.AntiEntropyConfig) *AntiEntropy {
+func NewAntiEntropy(nodeID node.NodeID, store adapter.Storage, ring *hashring.HashRing, tr adapter.Transport, cfg config.AntiEntropyConfig) *AntiEntropy {
 	return &AntiEntropy{
 		nodeID:     nodeID,
 		storage:    store,
@@ -272,7 +272,7 @@ func (ae *AntiEntropy) pushAllKeysTo(peer node.NodeID, done func(error)) {
 		}
 	}
 
-	ae.storage.Scan(nil, nil, func(key []byte, siblings *storage.SiblingSet) bool {
+	ae.storage.Scan(nil, nil, func(key []byte, siblings *adapter.SiblingSet) bool {
 		pending++
 		ae.transport.RemotePut(peer, key, siblings, func(err error) {
 			recordErr(err)
@@ -288,7 +288,7 @@ func (ae *AntiEntropy) pushAllKeysTo(peer node.NodeID, done func(error)) {
 }
 
 // OnKeyUpdate incrementally folds a write for key into the Merkle tree.
-func (ae *AntiEntropy) OnKeyUpdate(key []byte, siblings *storage.SiblingSet) {
+func (ae *AntiEntropy) OnKeyUpdate(key []byte, siblings *adapter.SiblingSet) {
 	if !ae.config.Enabled {
 		return
 	}
@@ -297,7 +297,7 @@ func (ae *AntiEntropy) OnKeyUpdate(key []byte, siblings *storage.SiblingSet) {
 
 // OnKeyDelete incrementally removes a deleted key's prior contribution
 // from the Merkle tree.
-func (ae *AntiEntropy) OnKeyDelete(key []byte, oldSiblings *storage.SiblingSet) {
+func (ae *AntiEntropy) OnKeyDelete(key []byte, oldSiblings *adapter.SiblingSet) {
 	if !ae.config.Enabled {
 		return
 	}

@@ -1,4 +1,4 @@
-package transport
+package adapter
 
 import (
 	"errors"
@@ -7,22 +7,38 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/adapter/storage"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/pool"
 	"goquorum.io/v2/infra/transport/iouring"
 )
 
-// errConnClosed is returned when an RPC is canceled because connection closed.
-var errConnClosed = errors.New("iouring: connection closed")
+// GossipEntry represents a peer's heartbeat state gossiped between nodes.
+type GossipEntry = wire.GossipEntry
 
-// defaultRequestTimeout bounds RPC reply wait duration.
-const defaultRequestTimeout = 5 * time.Second
+// Transport is the outbound networking port used by the engine layer to communicate with peers.
+type Transport interface {
+	// RemotePut sends a write replication request to node id and invokes done on reply or error.
+	RemotePut(id node.NodeID, key []byte, siblings *SiblingSet, done func(error))
+	// RemoteGet reads a key's sibling set from node id.
+	RemoteGet(id node.NodeID, key []byte, done func(*SiblingSet, error))
+	// Heartbeat sends a heartbeat ping to node id.
+	Heartbeat(id node.NodeID, done func(error))
+	// GetMerkleRoot requests node id's Merkle tree root hash for anti-entropy sync.
+	GetMerkleRoot(id node.NodeID, done func(root []byte, err error))
+	// NotifyLeaving informs node id that the local node is leaving gracefully.
+	NotifyLeaving(id node.NodeID, done func(error))
+	// GossipExchange exchanges gossip state with node id.
+	GossipExchange(id node.NodeID, entries []GossipEntry, done func([]GossipEntry, error))
+	// Dial initiates an asynchronous TCP connection to addr for node id.
+	Dial(id node.NodeID, addr string) error
+	// Close releases all connections held by the transport.
+	Close() error
+}
 
-type pendingRPCType uint8
+type rpcType uint8
 
 const (
-	rpcRemotePut pendingRPCType = iota + 1
+	rpcRemotePut rpcType = iota + 1
 	rpcRemoteGet
 	rpcHeartbeat
 	rpcGetMerkleRoot
@@ -31,17 +47,20 @@ const (
 )
 
 type pendingRPC struct {
-	rpcType      pendingRPCType
+	rpcType      rpcType
 	timer        reactor.TimerID
-	onErrDone    func(error) // Used for rpcRemotePut, rpcHeartbeat, rpcNotifyLeaving
-	onGetDone    func(*storage.SiblingSet, error)
+	onErrDone    func(error)
+	onGetDone    func(*SiblingSet, error)
 	onMerkleDone func([]byte, error)
 	onGossipDone func([]GossipEntry, error)
 }
 
-// Adapter bridges the domain Transport port to the pure I/O iouring.Client
-// using static event hookbacks and zero-allocation codecs.
-type Adapter struct {
+const defaultRequestTimeout = 5 * time.Second
+
+var errConnClosed = errors.New("transport: connection closed")
+
+// TransportAdapter adapts an event-driven iouring.Client into a domain Transport engine.
+type TransportAdapter struct {
 	client         *iouring.Client
 	r              *reactor.Reactor
 	bytePool       *pool.BucketArrayPool[byte]
@@ -49,30 +68,23 @@ type Adapter struct {
 	nextReqID      uint64
 	requestTimeout time.Duration
 
-	// OnMessageHook is invoked when an unsolicited (non-RPC reply) framed message arrives.
-	OnMessageHook func(id node.NodeID, hdr iouring.FrameHeader, body []byte)
-
-	// OnConnectedHook is invoked when a connection to peer id is established.
-	OnConnectedHook func(id node.NodeID, addr string)
-
-	// OnDisconnectedHook is invoked when a connection to peer id dies.
+	// Hooks for connection lifecycle and unhandled inbound frames
+	OnConnectedHook    func(id node.NodeID, addr string)
 	OnDisconnectedHook func(id node.NodeID, err error)
-
-	// OnConnectErrorHook is invoked when connecting to peer id fails.
 	OnConnectErrorHook func(id node.NodeID, err error)
+	OnMessageHook      func(id node.NodeID, hdr iouring.FrameHeader, body []byte)
 }
 
-var _ Transport = (*Adapter)(nil)
-var _ iouring.ClientHandler = (*Adapter)(nil)
+var _ Transport = (*TransportAdapter)(nil)
+var _ iouring.ClientHandler = (*TransportAdapter)(nil)
 
-// NewAdapter creates a new Adapter wrapping client.
-// It shares the client's byte buffer pool for zero-allocation encoding.
-func NewAdapter(client *iouring.Client, r *reactor.Reactor) *Adapter {
+// NewTransportAdapter creates a new Transport adapter over an event-driven iouring.Client.
+func NewTransportAdapter(client *iouring.Client, r *reactor.Reactor) *TransportAdapter {
 	bp := client.BytePool()
 	if bp == nil {
 		bp = pool.NewDefaultArrayPool[byte]()
 	}
-	a := &Adapter{
+	a := &TransportAdapter{
 		client:         client,
 		r:              r,
 		bytePool:       bp,
@@ -83,28 +95,28 @@ func NewAdapter(client *iouring.Client, r *reactor.Reactor) *Adapter {
 	return a
 }
 
-// BytePool returns the byte buffer pool used by this Adapter.
-func (a *Adapter) BytePool() *pool.BucketArrayPool[byte] {
+// BytePool returns the byte buffer pool used by this TransportAdapter.
+func (a *TransportAdapter) BytePool() *pool.BucketArrayPool[byte] {
 	return a.bytePool
 }
 
 // SetRequestTimeout sets the per-RPC request timeout duration.
-func (a *Adapter) SetRequestTimeout(d time.Duration) {
+func (a *TransportAdapter) SetRequestTimeout(d time.Duration) {
 	a.requestTimeout = d
 }
 
 // Dial establishes an outbound TCP connection to peer id at addr.
-func (a *Adapter) Dial(id node.NodeID, addr string) error {
+func (a *TransportAdapter) Dial(id node.NodeID, addr string) error {
 	return a.client.Dial(id, addr)
 }
 
 // HandleCompletion routes io_uring CQE events to the client.
-func (a *Adapter) HandleCompletion(ev reactor.Event) bool {
+func (a *TransportAdapter) HandleCompletion(ev reactor.Event) bool {
 	return a.client.HandleCompletion(ev)
 }
 
 // OnFrame implements iouring.ClientHandler with zero closure allocations.
-func (a *Adapter) OnFrame(id node.NodeID, hdr iouring.FrameHeader, body []byte) {
+func (a *TransportAdapter) OnFrame(id node.NodeID, hdr iouring.FrameHeader, body []byte) {
 	slot, ok := a.slots.Get(hdr.CorrelationID)
 	if !ok {
 		if a.OnMessageHook != nil {
@@ -112,99 +124,97 @@ func (a *Adapter) OnFrame(id node.NodeID, hdr iouring.FrameHeader, body []byte) 
 		}
 		return
 	}
+	defer a.slots.Release(hdr.CorrelationID)
+	a.r.CancelTimer(slot.Value.timer)
 
-	p := slot.Value
-	a.slots.Release(hdr.CorrelationID)
-	a.r.CancelTimer(p.timer)
-
-	switch p.rpcType {
+	switch slot.Value.rpcType {
 	case rpcRemotePut:
 		var resp wire.RemotePutResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onErrDone != nil {
-				p.onErrDone(uErr)
+			if slot.Value.onErrDone != nil {
+				slot.Value.onErrDone(uErr)
 			}
 			return
 		}
-		if p.onErrDone != nil {
-			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		if slot.Value.onErrDone != nil {
+			slot.Value.onErrDone(wire.StatusCodeToError(resp.Status))
 		}
 
 	case rpcRemoteGet:
 		var resp wire.RemoteGetResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onGetDone != nil {
-				p.onGetDone(nil, uErr)
+			if slot.Value.onGetDone != nil {
+				slot.Value.onGetDone(nil, uErr)
 			}
 			return
 		}
 		if resp.Status != wire.StatusOK {
-			if p.onGetDone != nil {
-				p.onGetDone(nil, wire.StatusCodeToError(resp.Status))
+			if slot.Value.onGetDone != nil {
+				slot.Value.onGetDone(nil, wire.StatusCodeToError(resp.Status))
 			}
 			return
 		}
-		if p.onGetDone != nil {
-			p.onGetDone(resp.Siblings, nil)
+		if slot.Value.onGetDone != nil {
+			slot.Value.onGetDone(resp.Siblings, nil)
 		}
 
 	case rpcHeartbeat:
 		var resp wire.HeartbeatResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onErrDone != nil {
-				p.onErrDone(uErr)
+			if slot.Value.onErrDone != nil {
+				slot.Value.onErrDone(uErr)
 			}
 			return
 		}
-		if p.onErrDone != nil {
-			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		if slot.Value.onErrDone != nil {
+			slot.Value.onErrDone(wire.StatusCodeToError(resp.Status))
 		}
 
 	case rpcGetMerkleRoot:
 		var resp wire.GetMerkleRootResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onMerkleDone != nil {
-				p.onMerkleDone(nil, uErr)
+			if slot.Value.onMerkleDone != nil {
+				slot.Value.onMerkleDone(nil, uErr)
 			}
 			return
 		}
 		if resp.Status != wire.StatusOK {
-			if p.onMerkleDone != nil {
-				p.onMerkleDone(nil, wire.StatusCodeToError(resp.Status))
+			if slot.Value.onMerkleDone != nil {
+				slot.Value.onMerkleDone(nil, wire.StatusCodeToError(resp.Status))
 			}
 			return
 		}
-		if p.onMerkleDone != nil {
-			p.onMerkleDone(resp.Root, nil)
+		if slot.Value.onMerkleDone != nil {
+			slot.Value.onMerkleDone(resp.Root, nil)
 		}
 
 	case rpcNotifyLeaving:
 		var resp wire.NotifyLeavingResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onErrDone != nil {
-				p.onErrDone(uErr)
+			if slot.Value.onErrDone != nil {
+				slot.Value.onErrDone(uErr)
 			}
 			return
 		}
-		if p.onErrDone != nil {
-			p.onErrDone(wire.StatusCodeToError(resp.Status))
+		if slot.Value.onErrDone != nil {
+			slot.Value.onErrDone(wire.StatusCodeToError(resp.Status))
 		}
 
 	case rpcGossipExchange:
 		var resp wire.GossipExchangeResponse
 		if uErr := resp.Unmarshal(body); uErr != nil {
-			if p.onGossipDone != nil {
-				p.onGossipDone(nil, uErr)
+			if slot.Value.onGossipDone != nil {
+				slot.Value.onGossipDone(nil, uErr)
 			}
 			return
 		}
-		if p.onGossipDone != nil {
-			p.onGossipDone(resp.Entries, nil)
+		if slot.Value.onGossipDone != nil {
+			slot.Value.onGossipDone(resp.Entries, nil)
 		}
 	}
 }
 
-func (a *Adapter) dispatchError(p pendingRPC, err error) {
+func (a *TransportAdapter) dispatchError(p pendingRPC, err error) {
 	switch p.rpcType {
 	case rpcRemotePut, rpcHeartbeat, rpcNotifyLeaving:
 		if p.onErrDone != nil {
@@ -226,28 +236,28 @@ func (a *Adapter) dispatchError(p pendingRPC, err error) {
 }
 
 // OnConnected implements iouring.ClientHandler.
-func (a *Adapter) OnConnected(id node.NodeID, addr string) {
+func (a *TransportAdapter) OnConnected(id node.NodeID, addr string) {
 	if a.OnConnectedHook != nil {
 		a.OnConnectedHook(id, addr)
 	}
 }
 
 // OnDisconnected implements iouring.ClientHandler.
-func (a *Adapter) OnDisconnected(id node.NodeID, err error) {
+func (a *TransportAdapter) OnDisconnected(id node.NodeID, err error) {
 	if a.OnDisconnectedHook != nil {
 		a.OnDisconnectedHook(id, err)
 	}
 }
 
 // OnConnectError implements iouring.ClientHandler.
-func (a *Adapter) OnConnectError(id node.NodeID, err error) {
+func (a *TransportAdapter) OnConnectError(id node.NodeID, err error) {
 	if a.OnConnectErrorHook != nil {
 		a.OnConnectErrorHook(id, err)
 	}
 }
 
 // RemotePut replicates a write to node id.
-func (a *Adapter) RemotePut(id node.NodeID, key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (a *TransportAdapter) RemotePut(id node.NodeID, key []byte, siblings *SiblingSet, done func(error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -257,10 +267,9 @@ func (a *Adapter) RemotePut(id node.NodeID, key []byte, siblings *storage.Siblin
 		if !ok {
 			return
 		}
-		cb := s.Value.onErrDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(fmt.Errorf("transport: remote put to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onErrDone != nil {
+			s.Value.onErrDone(fmt.Errorf("transport: remote put to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -293,7 +302,7 @@ func (a *Adapter) RemotePut(id node.NodeID, key []byte, siblings *storage.Siblin
 }
 
 // RemoteGet reads a key's sibling set from node id.
-func (a *Adapter) RemoteGet(id node.NodeID, key []byte, done func(*storage.SiblingSet, error)) {
+func (a *TransportAdapter) RemoteGet(id node.NodeID, key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -303,10 +312,9 @@ func (a *Adapter) RemoteGet(id node.NodeID, key []byte, done func(*storage.Sibli
 		if !ok {
 			return
 		}
-		cb := s.Value.onGetDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(nil, fmt.Errorf("transport: remote get to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onGetDone != nil {
+			s.Value.onGetDone(nil, fmt.Errorf("transport: remote get to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -339,7 +347,7 @@ func (a *Adapter) RemoteGet(id node.NodeID, key []byte, done func(*storage.Sibli
 }
 
 // Heartbeat sends a heartbeat ping to node id.
-func (a *Adapter) Heartbeat(id node.NodeID, done func(error)) {
+func (a *TransportAdapter) Heartbeat(id node.NodeID, done func(error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -349,10 +357,9 @@ func (a *Adapter) Heartbeat(id node.NodeID, done func(error)) {
 		if !ok {
 			return
 		}
-		cb := s.Value.onErrDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(fmt.Errorf("transport: heartbeat to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onErrDone != nil {
+			s.Value.onErrDone(fmt.Errorf("transport: heartbeat to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -370,7 +377,7 @@ func (a *Adapter) Heartbeat(id node.NodeID, done func(error)) {
 }
 
 // GetMerkleRoot fetches node id's current anti-entropy Merkle root.
-func (a *Adapter) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
+func (a *TransportAdapter) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -380,10 +387,9 @@ func (a *Adapter) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
 		if !ok {
 			return
 		}
-		cb := s.Value.onMerkleDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(nil, fmt.Errorf("transport: get merkle root to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onMerkleDone != nil {
+			s.Value.onMerkleDone(nil, fmt.Errorf("transport: get merkle root to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -401,7 +407,7 @@ func (a *Adapter) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
 }
 
 // NotifyLeaving informs node id that the local node is leaving the cluster gracefully.
-func (a *Adapter) NotifyLeaving(id node.NodeID, done func(error)) {
+func (a *TransportAdapter) NotifyLeaving(id node.NodeID, done func(error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -411,10 +417,9 @@ func (a *Adapter) NotifyLeaving(id node.NodeID, done func(error)) {
 		if !ok {
 			return
 		}
-		cb := s.Value.onErrDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(fmt.Errorf("transport: notify leaving to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onErrDone != nil {
+			s.Value.onErrDone(fmt.Errorf("transport: notify leaving to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -432,7 +437,7 @@ func (a *Adapter) NotifyLeaving(id node.NodeID, done func(error)) {
 }
 
 // GossipExchange sends the local node's gossip state to node id and returns its reply.
-func (a *Adapter) GossipExchange(id node.NodeID, entries []GossipEntry, done func([]GossipEntry, error)) {
+func (a *TransportAdapter) GossipExchange(id node.NodeID, entries []GossipEntry, done func([]GossipEntry, error)) {
 	a.nextReqID++
 	slotID := a.nextReqID
 	slot := a.slots.Acquire(slotID)
@@ -442,10 +447,9 @@ func (a *Adapter) GossipExchange(id node.NodeID, entries []GossipEntry, done fun
 		if !ok {
 			return
 		}
-		cb := s.Value.onGossipDone
-		a.slots.Release(slotID)
-		if cb != nil {
-			cb(nil, fmt.Errorf("transport: gossip exchange to %s: timed out waiting for reply", id))
+		defer a.slots.Release(slotID)
+		if s.Value.onGossipDone != nil {
+			s.Value.onGossipDone(nil, fmt.Errorf("transport: gossip exchange to %s: timed out waiting for reply", id))
 		}
 	})
 
@@ -478,7 +482,7 @@ func (a *Adapter) GossipExchange(id node.NodeID, entries []GossipEntry, done fun
 }
 
 // Close releases every connection the client holds.
-func (a *Adapter) Close() error {
+func (a *TransportAdapter) Close() error {
 	a.slots.ForEach(func(id uint64, s *pool.Slot[pendingRPC]) {
 		a.r.CancelTimer(s.Value.timer)
 		a.dispatchError(s.Value, errConnClosed)

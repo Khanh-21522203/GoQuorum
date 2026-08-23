@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/membership"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/statemachine"
@@ -58,20 +58,16 @@ type Gossip struct {
 	selfAddr   string
 	state      map[node.NodeID]*NodeEntry
 	membership *membership.MembershipManager
-	transport  transport.Transport
+	transport  adapter.Transport
 	reactor    *reactor.Reactor
 	config     GossipConfig
-
-	lifecycle *statemachine.Machine[gossipState, gossipTrigger]
-	timerID   reactor.TimerID
+	timerID    reactor.TimerID
+	lifecycle  *statemachine.Machine[gossipState, gossipTrigger]
 }
 
-// NewGossip creates a gossip runner for the local node.
-//
-// FanOut and Interval fall back to 3 peers and 1 second respectively when
-// left unset, so a caller can pass a zero-value GossipConfig and still get a
-// working cadence.
-func NewGossip(nodeID node.NodeID, selfAddr string, mm *membership.MembershipManager, tr transport.Transport, rt *reactor.Reactor, cfg GossipConfig) *Gossip {
+// NewGossip constructs a new Gossip instance attached to mm and tr, driven
+// by rt. Call Start to arm the periodic round timer.
+func NewGossip(nodeID node.NodeID, selfAddr string, mm *membership.MembershipManager, tr adapter.Transport, rt *reactor.Reactor, cfg GossipConfig) *Gossip {
 	if cfg.FanOut <= 0 {
 		cfg.FanOut = 3
 	}
@@ -169,7 +165,7 @@ func (g *Gossip) runRound() {
 		if g.membership.GetHTTPAddress(peerID) == "" {
 			continue
 		}
-		g.transport.GossipExchange(peerID, entries, func(reply []transport.GossipEntry, err error) {
+		g.transport.GossipExchange(peerID, entries, func(reply []adapter.GossipEntry, err error) {
 			if err != nil {
 				return
 			}
@@ -244,10 +240,10 @@ func (g *Gossip) SetSelf(status membership.NodeStatus) {
 
 // stateToEntries flattens local gossip state to the wire shape the
 // transport port exchanges.
-func stateToEntries(state map[node.NodeID]*NodeEntry) []transport.GossipEntry {
-	entries := make([]transport.GossipEntry, 0, len(state))
+func stateToEntries(state map[node.NodeID]*NodeEntry) []adapter.GossipEntry {
+	entries := make([]adapter.GossipEntry, 0, len(state))
 	for _, entry := range state {
-		entries = append(entries, transport.GossipEntry{
+		entries = append(entries, adapter.GossipEntry{
 			NodeID:    entry.NodeID,
 			Addr:      entry.Addr,
 			Status:    uint8(entry.Status),
@@ -260,7 +256,7 @@ func stateToEntries(state map[node.NodeID]*NodeEntry) []transport.GossipEntry {
 
 // entriesToState rebuilds a gossip state map from the transport port's wire
 // shape.
-func entriesToState(entries []transport.GossipEntry) map[node.NodeID]*NodeEntry {
+func entriesToState(entries []adapter.GossipEntry) map[node.NodeID]*NodeEntry {
 	state := make(map[node.NodeID]*NodeEntry, len(entries))
 	for _, entry := range entries {
 		state[entry.NodeID] = &NodeEntry{

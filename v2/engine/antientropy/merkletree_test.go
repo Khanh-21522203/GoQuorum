@@ -7,16 +7,16 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter"
 )
 
 // sibling builds a single-sibling SiblingSet for a given node/counter/value,
 // which is all toggleKey needs to fold a key into the tree.
-func sibling(nodeID node.NodeID, counter uint64, value []byte) *storage.SiblingSet {
+func sibling(nodeID node.NodeID, counter uint64, value []byte) *adapter.SiblingSet {
 	vc := vclock.NewVectorClock()
 	vc.Set(nodeID, counter)
-	return &storage.SiblingSet{
-		Siblings: []storage.Sibling{{Value: value, VClock: vc}},
+	return &adapter.SiblingSet{
+		Siblings: []adapter.Sibling{{Value: value, VClock: vc}},
 	}
 }
 
@@ -141,23 +141,23 @@ func TestGetLevel_RootLevelHasExactlyOneHash(t *testing.T) {
 	}
 }
 
-// fakeStorage is a minimal storage.Storage double whose only interesting
+// fakeStorage is a minimal adapter.Storage double whose only interesting
 // method is Scan, driven synchronously by a fixed key/sibling-set fixture.
 type fakeStorage struct {
 	keys     [][]byte
-	siblings []*storage.SiblingSet
+	siblings []*adapter.SiblingSet
 	scanErr  error
 }
 
-func (f *fakeStorage) Get(key []byte, done func(*storage.SiblingSet, error))          { done(nil, nil) }
-func (f *fakeStorage) GetRaw(key []byte, done func(*storage.SiblingSet, error))       { done(nil, nil) }
-func (f *fakeStorage) Put(key []byte, siblings *storage.SiblingSet, done func(error)) { done(nil) }
+func (f *fakeStorage) Get(key []byte, done func(*adapter.SiblingSet, error))          { done(nil, nil) }
+func (f *fakeStorage) GetRaw(key []byte, done func(*adapter.SiblingSet, error))       { done(nil, nil) }
+func (f *fakeStorage) Put(key []byte, siblings *adapter.SiblingSet, done func(error)) { done(nil) }
 func (f *fakeStorage) Delete(key []byte, ctx vclock.VectorClock, done func(error))    { done(nil) }
 func (f *fakeStorage) LocalNodeID() node.NodeID                                       { return node.NodeID("fake-node") }
-func (f *fakeStorage) Stats() storage.Stats                                           { return storage.Stats{} }
+func (f *fakeStorage) Stats() adapter.StorageStats                                    { return adapter.StorageStats{} }
 func (f *fakeStorage) Close() error                                                   { return nil }
 
-func (f *fakeStorage) Scan(start, end []byte, fn storage.ScanFunc, done func(error)) {
+func (f *fakeStorage) Scan(start, end []byte, fn adapter.ScanFunc, done func(error)) {
 	for i, k := range f.keys {
 		if !fn(k, f.siblings[i]) {
 			break
@@ -175,7 +175,7 @@ func TestBuild_MatchesManualUpdateKey(t *testing.T) {
 		[]byte("key-d"),
 		[]byte("key-e"),
 	}
-	fixtureSiblings := []*storage.SiblingSet{
+	fixtureSiblings := []*adapter.SiblingSet{
 		sibling("n1", 1, []byte("va")),
 		sibling("n2", 1, []byte("vb")),
 		sibling("n1", 2, []byte("vc")),

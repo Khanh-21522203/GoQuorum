@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 
-	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter"
 )
 
 // hashSize is the width of every leaf and internal node hash (SHA-256).
@@ -58,19 +58,15 @@ func NewMerkleTree(depth int) *MerkleTree {
 	return mt
 }
 
-// Build resets every leaf bucket and repopulates the tree from a full
-// keyspace scan. store.Scan is callback-based, but Build's own contract is
-// synchronous: the done callback below only ever captures the terminal
-// error into scanErr, which Build reads immediately after Scan returns
-// (Scan does not return until it has invoked done exactly once).
-func (mt *MerkleTree) Build(store storage.Storage) error {
-	for i := 0; i < mt.numBuckets; i++ {
+// Build populates the tree by scanning all keys in store and rebuilding
+// the internal hashes from leaves to root.
+func (mt *MerkleTree) Build(store adapter.Storage) error {
+	for i := range mt.leafHashes {
 		mt.leafHashes[i] = make([]byte, hashSize)
-		mt.dirty[i] = true
 	}
 
 	var scanErr error
-	store.Scan(nil, nil, func(key []byte, siblings *storage.SiblingSet) bool {
+	store.Scan(nil, nil, func(key []byte, siblings *adapter.SiblingSet) bool {
 		mt.toggleKey(key, siblings)
 		return true
 	}, func(err error) {
@@ -84,11 +80,11 @@ func (mt *MerkleTree) Build(store storage.Storage) error {
 	return nil
 }
 
-// toggleKey folds (or, applied twice with the same siblings, un-folds) a
-// key's contribution into its bucket. XOR is its own inverse, so applying
-// the identical hash twice cancels out — this is what lets RemoveKey undo
-// a prior UpdateKey without knowing which other keys share the bucket.
-func (mt *MerkleTree) toggleKey(key []byte, siblings *storage.SiblingSet) {
+// toggleKey XORs a key's contribution into its leaf bucket. Calling toggleKey
+// twice with the exact same (key, siblings) pair returns the bucket hash to
+// its prior value, which is how RemoveKey and the old-value step of UpdateKey
+// work without a full tree rebuild.
+func (mt *MerkleTree) toggleKey(key []byte, siblings *adapter.SiblingSet) {
 	if siblings == nil {
 		return
 	}
@@ -115,14 +111,14 @@ func (mt *MerkleTree) toggleKey(key []byte, siblings *storage.SiblingSet) {
 
 // UpdateKey incrementally folds key's current siblings into its bucket,
 // marking the bucket dirty so the next read rebuilds ancestor hashes.
-func (mt *MerkleTree) UpdateKey(key []byte, siblings *storage.SiblingSet) {
+func (mt *MerkleTree) UpdateKey(key []byte, siblings *adapter.SiblingSet) {
 	mt.toggleKey(key, siblings)
 }
 
 // RemoveKey removes key's prior contribution from its bucket. oldSiblings
 // must be exactly what was last passed to UpdateKey for this key, since
 // the toggle is a symmetric XOR, not a true delete.
-func (mt *MerkleTree) RemoveKey(key []byte, oldSiblings *storage.SiblingSet) {
+func (mt *MerkleTree) RemoveKey(key []byte, oldSiblings *adapter.SiblingSet) {
 	mt.toggleKey(key, oldSiblings)
 }
 

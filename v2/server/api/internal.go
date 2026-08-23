@@ -6,7 +6,7 @@ import (
 
 	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/coordinator"
 	"goquorum.io/v2/engine/membership"
 )
@@ -17,7 +17,7 @@ import (
 //
 // (v1: internal/server/internal_api.go InternalAPI)
 type InternalAPI struct {
-	storage    storage.Storage
+	storage    adapter.Storage
 	membership *membership.MembershipManager
 
 	// coordinator backs GetMerkleRoot. v1 wired an equivalent
@@ -34,7 +34,7 @@ type InternalAPI struct {
 // root).
 //
 // (v1: internal/server/internal_api.go NewInternalAPI)
-func NewInternalAPI(store storage.Storage, mm *membership.MembershipManager, coord *coordinator.Coordinator) *InternalAPI {
+func NewInternalAPI(store adapter.Storage, mm *membership.MembershipManager, coord *coordinator.Coordinator) *InternalAPI {
 	return &InternalAPI{storage: store, membership: mm, coordinator: coord}
 }
 
@@ -47,7 +47,7 @@ func NewInternalAPI(store storage.Storage, mm *membership.MembershipManager, coo
 // own.)
 type ReplicateReq struct {
 	Key           []byte
-	Sibling       storage.Sibling
+	Sibling       adapter.Sibling
 	CoordinatorID node.NodeID
 	RequestID     int64
 }
@@ -73,7 +73,7 @@ type InternalReadReq struct {
 //
 // (v1: internal/server/internal_api.go InternalReadResp)
 type InternalReadResp struct {
-	Siblings []storage.Sibling
+	Siblings []adapter.Sibling
 	Found    bool
 }
 

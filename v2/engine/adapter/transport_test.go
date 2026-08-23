@@ -1,32 +1,21 @@
-package transport
+package adapter
 
 import (
 	"bytes"
 	"errors"
 	"net"
 	"testing"
-	"time"
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/adapter/storage"
 	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/transport/iouring"
 )
 
-type fakeEventSource struct{}
-
-func (f *fakeEventSource) Poll(dst []reactor.Event, deadline time.Time) ([]reactor.Event, error) {
-	time.Sleep(10 * time.Millisecond)
-	return dst, nil
-}
-func (f *fakeEventSource) Wake() error  { return nil }
-func (f *fakeEventSource) Close() error { return nil }
-
-func newTestAdapter(t *testing.T) (*Adapter, *reactor.Reactor, *ioruntime.Runtime) {
+func newTestTransportAdapter(t *testing.T) (*TransportAdapter, *reactor.Reactor, *ioruntime.Runtime) {
 	t.Helper()
 	rt, err := ioruntime.New(64)
 	if err != nil {
@@ -34,7 +23,7 @@ func newTestAdapter(t *testing.T) (*Adapter, *reactor.Reactor, *ioruntime.Runtim
 	}
 	r := reactor.New(rt)
 	client := iouring.NewClient(rt, r, nil, nil)
-	adapter := NewAdapter(client, r)
+	adapter := NewTransportAdapter(client, r)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -46,16 +35,16 @@ func newTestAdapter(t *testing.T) (*Adapter, *reactor.Reactor, *ioruntime.Runtim
 	return adapter, r, rt
 }
 
-func TestAdapter_RemotePut_Success(t *testing.T) {
-	adapter, r, rt := newTestAdapter(t)
+func TestTransportAdapter_RemotePut_Success(t *testing.T) {
+	adapter, r, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
 	key := []byte("key-put")
 	vc := vclock.NewVectorClock()
 	vc.Set("node-1", 1)
-	siblings := &storage.SiblingSet{
-		Siblings: []storage.Sibling{
+	siblings := &SiblingSet{
+		Siblings: []Sibling{
 			{Value: []byte("val1"), VClock: vc, Timestamp: 100},
 		},
 	}
@@ -87,18 +76,18 @@ func TestAdapter_RemotePut_Success(t *testing.T) {
 	_ = r
 }
 
-func TestAdapter_RemoteGet_Success(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_RemoteGet_Success(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
 	key := []byte("key-get")
 
-	var gotSiblings *storage.SiblingSet
+	var gotSiblings *SiblingSet
 	var doneErr error
 	var doneCalled bool
 
-	adapter.RemoteGet(peerID, key, func(ss *storage.SiblingSet, err error) {
+	adapter.RemoteGet(peerID, key, func(ss *SiblingSet, err error) {
 		doneCalled = true
 		gotSiblings = ss
 		doneErr = err
@@ -111,8 +100,8 @@ func TestAdapter_RemoteGet_Success(t *testing.T) {
 	vc.Set("node-1", 2)
 	resp := wire.RemoteGetResponse{
 		Status: wire.StatusOK,
-		Siblings: &storage.SiblingSet{
-			Siblings: []storage.Sibling{
+		Siblings: &SiblingSet{
+			Siblings: []Sibling{
 				{Value: []byte("get-val"), VClock: vc, Timestamp: 200},
 			},
 		},
@@ -135,8 +124,8 @@ func TestAdapter_RemoteGet_Success(t *testing.T) {
 	}
 }
 
-func TestAdapter_RemoteGet_KeyNotFound(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_RemoteGet_KeyNotFound(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
@@ -145,7 +134,7 @@ func TestAdapter_RemoteGet_KeyNotFound(t *testing.T) {
 	var doneErr error
 	var doneCalled bool
 
-	adapter.RemoteGet(peerID, key, func(ss *storage.SiblingSet, err error) {
+	adapter.RemoteGet(peerID, key, func(ss *SiblingSet, err error) {
 		doneCalled = true
 		doneErr = err
 	})
@@ -168,8 +157,8 @@ func TestAdapter_RemoteGet_KeyNotFound(t *testing.T) {
 	}
 }
 
-func TestAdapter_Heartbeat_Success(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_Heartbeat_Success(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
@@ -191,8 +180,8 @@ func TestAdapter_Heartbeat_Success(t *testing.T) {
 	}
 }
 
-func TestAdapter_GetMerkleRoot_Success(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_GetMerkleRoot_Success(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
@@ -215,8 +204,8 @@ func TestAdapter_GetMerkleRoot_Success(t *testing.T) {
 	}
 }
 
-func TestAdapter_NotifyLeaving_Success(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_NotifyLeaving_Success(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
@@ -238,13 +227,13 @@ func TestAdapter_NotifyLeaving_Success(t *testing.T) {
 	}
 }
 
-func TestAdapter_GossipExchange_Success(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_GossipExchange_Success(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	const peerID node.NodeID = "node-1"
 	entries := []GossipEntry{
-		{NodeID: "node-1", Addr: "127.0.0.1:8001", Status: 1, Version: 10, UpdatedAt: 1000},
+		{NodeID: "node-1", Addr: "127.0.0.1:8001", Status: 1, Version: 10, UpdatedAt: 12345},
 	}
 
 	var gotEntries []GossipEntry
@@ -257,7 +246,7 @@ func TestAdapter_GossipExchange_Success(t *testing.T) {
 
 	slotID := adapter.nextReqID
 	replyEntries := []GossipEntry{
-		{NodeID: "node-2", Addr: "127.0.0.1:8002", Status: 1, Version: 15, UpdatedAt: 2000},
+		{NodeID: "node-2", Addr: "127.0.0.1:8002", Status: 1, Version: 15, UpdatedAt: 12350},
 	}
 	resp := wire.GossipExchangeResponse{Entries: replyEntries}
 	respBytes, _ := resp.Marshal()
@@ -268,8 +257,8 @@ func TestAdapter_GossipExchange_Success(t *testing.T) {
 	}
 }
 
-func TestAdapter_Hooks(t *testing.T) {
-	adapter, _, rt := newTestAdapter(t)
+func TestTransportAdapter_Hooks(t *testing.T) {
+	adapter, _, rt := newTestTransportAdapter(t)
 	defer rt.Close()
 
 	var connectedID node.NodeID

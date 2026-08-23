@@ -1,4 +1,4 @@
-package storage
+package adapter
 
 import (
 	"errors"
@@ -12,9 +12,30 @@ import (
 	"goquorum.io/v2/infra/storage/journal"
 )
 
-// StatsProvider is an optional interface a KVStore may implement to report statistics.
+// Storage is the domain port implemented by storage adapters (e.g. StorageAdapter over journal.Store).
+// The engine layer depends only on this interface.
+type Storage interface {
+	// Get returns the sibling set for key, filtering out tombstones and expired siblings.
+	Get(key []byte, done func(*SiblingSet, error))
+	// GetRaw returns the sibling set for key with tombstones visible (used by read-repair/anti-entropy).
+	GetRaw(key []byte, done func(*SiblingSet, error))
+	// Put reconciles siblings into the store for key.
+	Put(key []byte, siblings *SiblingSet, done func(error))
+	// Delete writes a tombstone for key, causally ordered by ctx.
+	Delete(key []byte, ctx vclock.VectorClock, done func(error))
+	// Scan visits every key in [start, end) in order, invoking fn for each one.
+	Scan(start, end []byte, fn ScanFunc, done func(error))
+	// LocalNodeID returns the ID of the node this storage engine serves.
+	LocalNodeID() node.NodeID
+	// Stats returns point-in-time storage engine statistics.
+	Stats() StorageStats
+	// Close releases all resources held by the storage engine.
+	Close() error
+}
+
+// StatsProvider is an optional interface a store may implement to report statistics.
 type StatsProvider interface {
-	Stats() Stats
+	Stats() StorageStats
 }
 
 type storageOpType uint8
@@ -36,106 +57,103 @@ type pendingStorageOp struct {
 	onCompact  func(journal.CompactStats, error)
 }
 
-// Adapter adapts an event-driven KVStore into a domain Storage engine, managing
+// StorageAdapter adapts an event-driven journal.Store into a domain Storage engine, managing
 // SiblingSet serialization, vector clock reconciliation, and TTL filtering.
-type Adapter struct {
-	kv     KVStore
+type StorageAdapter struct {
+	store  *journal.Store
 	nodeID node.NodeID
 
 	nextReqID uint64
 	slots     *pool.SlotTable[pendingStorageOp]
 
-	// OnStorageError is invoked whenever the underlying KVStore reports a storage error.
-	OnStorageError func(err error)
+	// OnStorageErrorHook is invoked whenever the underlying store reports a storage error.
+	OnStorageErrorHook func(err error)
 }
 
-var _ Storage = (*Adapter)(nil)
+var _ Storage = (*StorageAdapter)(nil)
+var _ journal.StoreHandler = (*StorageAdapter)(nil)
 
-// NewAdapter creates a new Storage adapter over an event-driven KVStore.
-func NewAdapter(kv KVStore, nodeID node.NodeID) *Adapter {
-	a := &Adapter{
-		kv:     kv,
+// NewStorageAdapter creates a new Storage adapter over an event-driven journal.Store.
+func NewStorageAdapter(store *journal.Store, nodeID node.NodeID) *StorageAdapter {
+	a := &StorageAdapter{
+		store:  store,
 		nodeID: nodeID,
 		slots:  pool.NewSlotTable[pendingStorageOp](1024),
 	}
-	kv.SetOnReadComplete(a.onReadComplete)
-	kv.SetOnWriteComplete(a.onWriteComplete)
-	kv.SetOnScanComplete(a.onScanComplete)
-	kv.SetOnCompactComplete(a.onCompactComplete)
-	kv.SetOnStorageError(a.onStorageError)
+	store.SetHandler(a)
 	return a
 }
 
-func (a *Adapter) onStorageError(err error) {
-	if a.OnStorageError != nil {
-		a.OnStorageError(err)
+// OnStorageError implements journal.StoreHandler.
+func (a *StorageAdapter) OnStorageError(err error) {
+	if a.OnStorageErrorHook != nil {
+		a.OnStorageErrorHook(err)
 	}
 }
 
-func (a *Adapter) onReadComplete(reqID uint64, key []byte, val []byte, err error) {
+// OnReadComplete implements journal.StoreHandler.
+func (a *StorageAdapter) OnReadComplete(reqID uint64, key []byte, val []byte, err error) {
 	slot, ok := a.slots.Get(reqID)
 	if !ok || slot.Value.opType != storageOpRead {
 		return
 	}
-	cb := slot.Value.onRead
-	rawOnly := slot.Value.rawOnly
-	a.slots.Release(reqID)
+	defer a.slots.Release(reqID)
 
 	if err != nil {
-		if cb != nil {
-			cb(nil, err)
+		if slot.Value.onRead != nil {
+			slot.Value.onRead(nil, err)
 		}
 		return
 	}
 	var ss SiblingSet
 	if err := ss.UnmarshalBinary(val); err != nil {
-		if cb != nil {
-			cb(nil, fmt.Errorf("%w: decoding sibling set: %v", quorumerr.ErrCorruptedData, err))
+		if slot.Value.onRead != nil {
+			slot.Value.onRead(nil, fmt.Errorf("%w: decoding sibling set: %v", quorumerr.ErrCorruptedData, err))
 		}
 		return
 	}
-	if !rawOnly && lastSiblingIsTombstone(&ss) {
-		if cb != nil {
-			cb(nil, quorumerr.ErrKeyNotFound)
+	if !slot.Value.rawOnly && lastSiblingIsTombstone(&ss) {
+		if slot.Value.onRead != nil {
+			slot.Value.onRead(nil, quorumerr.ErrKeyNotFound)
 		}
 		return
 	}
-	filtered := filterSiblings(&ss, !rawOnly)
+	filtered := filterSiblings(&ss, !slot.Value.rawOnly)
 	if len(filtered.Siblings) == 0 {
-		if cb != nil {
-			cb(nil, quorumerr.ErrKeyNotFound)
+		if slot.Value.onRead != nil {
+			slot.Value.onRead(nil, quorumerr.ErrKeyNotFound)
 		}
 		return
 	}
-	if cb != nil {
-		cb(filtered, nil)
+	if slot.Value.onRead != nil {
+		slot.Value.onRead(filtered, nil)
 	}
 }
 
-func (a *Adapter) onWriteComplete(reqID uint64, key []byte, err error) {
+// OnWriteComplete implements journal.StoreHandler.
+func (a *StorageAdapter) OnWriteComplete(reqID uint64, key []byte, err error) {
 	slot, ok := a.slots.Get(reqID)
 	if !ok || slot.Value.opType != storageOpWrite {
 		return
 	}
-	cb := slot.Value.onWrite
-	a.slots.Release(reqID)
-	if cb != nil {
-		cb(err)
+	defer a.slots.Release(reqID)
+
+	if slot.Value.onWrite != nil {
+		slot.Value.onWrite(err)
 	}
 }
 
-func (a *Adapter) onScanComplete(scanID uint64, items []journal.ScanEntry, err error) {
+// OnScanComplete implements journal.StoreHandler.
+func (a *StorageAdapter) OnScanComplete(scanID uint64, items []journal.ScanEntry, err error) {
 	slot, ok := a.slots.Get(scanID)
 	if !ok || slot.Value.opType != storageOpScan {
 		return
 	}
-	scanFn := slot.Value.onScanFn
-	done := slot.Value.onScanDone
-	a.slots.Release(scanID)
+	defer a.slots.Release(scanID)
 
 	if err != nil {
-		if done != nil {
-			done(err)
+		if slot.Value.onScanDone != nil {
+			slot.Value.onScanDone(err)
 		}
 		return
 	}
@@ -152,29 +170,30 @@ func (a *Adapter) onScanComplete(scanID uint64, items []journal.ScanEntry, err e
 		if len(filtered.Siblings) == 0 {
 			continue
 		}
-		if scanFn != nil && !scanFn(item.Key, filtered) {
+		if slot.Value.onScanFn != nil && !slot.Value.onScanFn(item.Key, filtered) {
 			break
 		}
 	}
-	if done != nil {
-		done(nil)
+	if slot.Value.onScanDone != nil {
+		slot.Value.onScanDone(nil)
 	}
 }
 
-func (a *Adapter) onCompactComplete(compactID uint64, stats journal.CompactStats, err error) {
+// OnCompactComplete implements journal.StoreHandler.
+func (a *StorageAdapter) OnCompactComplete(compactID uint64, stats journal.CompactStats, err error) {
 	slot, ok := a.slots.Get(compactID)
 	if !ok || slot.Value.opType != storageOpCompact {
 		return
 	}
-	cb := slot.Value.onCompact
-	a.slots.Release(compactID)
-	if cb != nil {
-		cb(stats, err)
+	defer a.slots.Release(compactID)
+
+	if slot.Value.onCompact != nil {
+		slot.Value.onCompact(stats, err)
 	}
 }
 
 // Get returns the sibling set for key, filtering out tombstones and expired siblings.
-func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
+func (a *StorageAdapter) Get(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
 	slot := a.slots.Acquire(reqID)
@@ -184,14 +203,14 @@ func (a *Adapter) Get(key []byte, done func(*SiblingSet, error)) {
 		onRead:  done,
 	}
 
-	if err := a.kv.Get(reqID, key); err != nil {
+	if err := a.store.Get(reqID, key); err != nil {
 		a.slots.Release(reqID)
 		done(nil, err)
 	}
 }
 
 // GetRaw returns the sibling set for key with tombstones visible (used by anti-entropy).
-func (a *Adapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
+func (a *StorageAdapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
 	a.nextReqID++
 	reqID := a.nextReqID
 	slot := a.slots.Acquire(reqID)
@@ -201,14 +220,14 @@ func (a *Adapter) GetRaw(key []byte, done func(*SiblingSet, error)) {
 		onRead:  done,
 	}
 
-	if err := a.kv.Get(reqID, key); err != nil {
+	if err := a.store.Get(reqID, key); err != nil {
 		a.slots.Release(reqID)
 		done(nil, err)
 	}
 }
 
 // Put reconciles incoming siblings against existing siblings and persists the result.
-func (a *Adapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
+func (a *StorageAdapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
 	a.GetRaw(key, func(existing *SiblingSet, err error) {
 		if err != nil && !errors.Is(err, quorumerr.ErrKeyNotFound) {
 			done(err)
@@ -236,7 +255,7 @@ func (a *Adapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
 			onWrite: done,
 		}
 
-		if err := a.kv.Put(reqID, key, buf); err != nil {
+		if err := a.store.Put(reqID, key, buf); err != nil {
 			a.slots.Release(reqID)
 			done(err)
 		}
@@ -244,7 +263,7 @@ func (a *Adapter) Put(key []byte, siblings *SiblingSet, done func(error)) {
 }
 
 // Delete writes a tombstone sibling causally ordered by ctx.
-func (a *Adapter) Delete(key []byte, ctx vclock.VectorClock, done func(error)) {
+func (a *StorageAdapter) Delete(key []byte, ctx vclock.VectorClock, done func(error)) {
 	tombstone := &SiblingSet{
 		Siblings: []Sibling{
 			{
@@ -258,7 +277,7 @@ func (a *Adapter) Delete(key []byte, ctx vclock.VectorClock, done func(error)) {
 }
 
 // Scan visits every key in [start, end) in order, invoking fn for each one.
-func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
+func (a *StorageAdapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 	a.nextReqID++
 	scanID := a.nextReqID
 	slot := a.slots.Acquire(scanID)
@@ -268,15 +287,15 @@ func (a *Adapter) Scan(start, end []byte, fn ScanFunc, done func(error)) {
 		onScanDone: done,
 	}
 
-	if err := a.kv.Scan(scanID, start, end); err != nil {
+	if err := a.store.Scan(scanID, start, end); err != nil {
 		a.slots.Release(scanID)
 		done(err)
 	}
 }
 
-// Compact initiates compaction on the underlying KVStore, applying domain-level
+// Compact initiates compaction on the underlying journal.Store, applying domain-level
 // tombstone and TTL filtering.
-func (a *Adapter) Compact(done func(journal.CompactStats, error)) {
+func (a *StorageAdapter) Compact(done func(journal.CompactStats, error)) {
 	a.nextReqID++
 	compactID := a.nextReqID
 	slot := a.slots.Acquire(compactID)
@@ -305,29 +324,29 @@ func (a *Adapter) Compact(done func(journal.CompactStats, error)) {
 		return true, newBytes
 	}
 
-	if err := a.kv.Compact(compactID, filter); err != nil {
+	if err := a.store.Compact(compactID, filter); err != nil {
 		a.slots.Release(compactID)
 		done(journal.CompactStats{}, err)
 	}
 }
 
 // LocalNodeID returns the configured local node identifier.
-func (a *Adapter) LocalNodeID() node.NodeID {
+func (a *StorageAdapter) LocalNodeID() node.NodeID {
 	return a.nodeID
 }
 
-// Stats returns point-in-time statistics from the underlying KVStore if supported.
-func (a *Adapter) Stats() Stats {
-	if sp, ok := a.kv.(StatsProvider); ok {
+// Stats returns point-in-time statistics from the underlying store if supported.
+func (a *StorageAdapter) Stats() StorageStats {
+	if sp, ok := any(a.store).(StatsProvider); ok {
 		return sp.Stats()
 	}
-	return Stats{}
+	return StorageStats{}
 }
 
-// Close closes the underlying KVStore.
-func (a *Adapter) Close() error {
+// Close closes the underlying store.
+func (a *StorageAdapter) Close() error {
 	a.slots.Reset()
-	return a.kv.Close()
+	return a.store.Close()
 }
 
 func filterSiblings(ss *SiblingSet, dropTombstones bool) *SiblingSet {

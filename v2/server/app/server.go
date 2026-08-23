@@ -10,8 +10,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/coordinator"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/membership"
@@ -48,8 +47,8 @@ type Server struct {
 	runtime *ioruntime.Runtime
 	reactor *reactor.Reactor
 
-	store         storage.Storage
-	transport     transport.Transport
+	store         adapter.Storage
+	transport     adapter.Transport
 	iouringClient *iouring.Client
 	iouringServer *iouring.Server
 
@@ -91,14 +90,14 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	r := reactor.New(rt)
 
-	// 2. Storage port (infra/storage/journal raw WAL adapted to engine/storage.Storage).
+	// 2. Storage port (infra/storage/journal raw WAL adapted to engine/adapter.Storage).
 	rawStore, err := journal.Open(rt, journal.Options{
 		Path: filepath.Join(cfg.Node.DataDir, walFileName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
-	store := storage.NewAdapter(rawStore, cfg.Node.NodeID)
+	store := adapter.NewStorageAdapter(rawStore, cfg.Node.NodeID)
 
 	// 3. Membership view.
 	mm := membership.NewMembershipManager(membershipConfig(cfg.Cluster), version)
@@ -124,15 +123,15 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("node %s not found in cfg.Cluster.Members (needed to know its own internal-RPC listen address)", cfg.Node.NodeID)
 	}
 
-	// 5. Transport port (engine/adapter/transport.Adapter wraps iouring.Client).
+	// 5. Transport port (engine/adapter.TransportAdapter wraps iouring.Client).
 	bytePool := pool.NewDefaultArrayPool[byte]()
 	tc := iouring.NewClient(rt, r, bytePool, nil)
-	adapter := transport.NewAdapter(tc, r)
+	trAdapter := adapter.NewTransportAdapter(tc, r)
 	for _, m := range cfg.Cluster.Members {
 		if m.ID == cfg.Node.NodeID {
 			continue
 		}
-		_ = adapter.Dial(m.ID, m.HTTPAddr)
+		_ = trAdapter.Dial(m.ID, m.HTTPAddr)
 	}
 
 	sHandler := &appServerHandler{}
@@ -144,7 +143,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	r.SetEventHandler(func(ev reactor.Event) {
-		if adapter.HandleCompletion(ev) {
+		if trAdapter.HandleCompletion(ev) {
 			return
 		}
 		if ts.HandleCompletion(ev) {
@@ -155,7 +154,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// 6. Coordinator, composed over the storage/transport ports plus the
 	// hash ring, membership view, and reactor.
-	coord := coordinator.NewCoordinator(cfg.Node.NodeID, ring, store, adapter, mm, r, cfg.Quorum())
+	coord := coordinator.NewCoordinator(cfg.Node.NodeID, ring, store, trAdapter, mm, r, cfg.Quorum())
 
 	// 7. Service-API implementations over the coordinator and ports.
 	clientAPI := api.NewClientAPI(coord)
@@ -170,7 +169,7 @@ func New(cfg *config.Config) (*Server, error) {
 		runtime:       rt,
 		reactor:       r,
 		store:         store,
-		transport:     adapter,
+		transport:     trAdapter,
 		iouringClient: tc,
 		iouringServer: ts,
 		ring:          ring,

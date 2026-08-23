@@ -5,7 +5,7 @@ import (
 
 	"goquorum.io/v2/contracts"
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/adapter/storage"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/membership"
 )
 
@@ -15,7 +15,7 @@ import (
 //
 // (v1: internal/server/admin_api.go AdminAPI)
 type AdminAPI struct {
-	storage    storage.Storage
+	storage    adapter.Storage
 	membership *membership.MembershipManager
 	nodeID     node.NodeID
 	version    string
@@ -26,7 +26,7 @@ type AdminAPI struct {
 // membership view, reporting nodeID/version/startTime in Health.
 //
 // (v1: internal/server/admin_api.go NewAdminAPI)
-func NewAdminAPI(store storage.Storage, mm *membership.MembershipManager, nodeID node.NodeID, version string, startTime time.Time) *AdminAPI {
+func NewAdminAPI(store adapter.Storage, mm *membership.MembershipManager, nodeID node.NodeID, version string, startTime time.Time) *AdminAPI {
 	return &AdminAPI{
 		storage:    store,
 		membership: mm,

@@ -177,12 +177,17 @@ type Store struct {
 	chunkPool *pool.BucketArrayPool[scanChunk] // Pool for scan chunk slices
 	scanPool  pool.ArrayPool[ScanEntry]        // Pool for final ScanEntry results
 
-	// Event Hooks (Registered by higher layer)
-	OnReadComplete    func(reqID uint64, key []byte, val []byte, err error)
-	OnWriteComplete   func(reqID uint64, key []byte, err error)
-	OnScanComplete    func(scanID uint64, items []ScanEntry, err error)
-	OnCompactComplete func(compactID uint64, stats CompactStats, err error)
-	OnStorageError    func(err error)
+	handler StoreHandler
+}
+
+// StoreHandler defines the static event callback interface for journal.Store,
+// matching the pattern of transport.ClientHandler.
+type StoreHandler interface {
+	OnReadComplete(reqID uint64, key []byte, val []byte, err error)
+	OnWriteComplete(reqID uint64, key []byte, err error)
+	OnScanComplete(scanID uint64, items []ScanEntry, err error)
+	OnCompactComplete(compactID uint64, stats CompactStats, err error)
+	OnStorageError(err error)
 }
 
 // Open initializes the Circular Ring Buffer WAL store, opens all segment files,
@@ -273,29 +278,9 @@ func Open(rt *ioruntime.Runtime, opts Options) (*Store, error) {
 	}, nil
 }
 
-// SetOnReadComplete registers the read completion event hook.
-func (s *Store) SetOnReadComplete(fn func(reqID uint64, key []byte, val []byte, err error)) {
-	s.OnReadComplete = fn
-}
-
-// SetOnWriteComplete registers the write completion event hook.
-func (s *Store) SetOnWriteComplete(fn func(reqID uint64, key []byte, err error)) {
-	s.OnWriteComplete = fn
-}
-
-// SetOnScanComplete registers the scan completion event hook.
-func (s *Store) SetOnScanComplete(fn func(scanID uint64, items []ScanEntry, err error)) {
-	s.OnScanComplete = fn
-}
-
-// SetOnCompactComplete registers the compaction completion event hook.
-func (s *Store) SetOnCompactComplete(fn func(compactID uint64, stats CompactStats, err error)) {
-	s.OnCompactComplete = fn
-}
-
-// SetOnStorageError registers the storage error event hook.
-func (s *Store) SetOnStorageError(fn func(err error)) {
-	s.OnStorageError = fn
+// SetHandler sets the StoreHandler for zero-allocation static event dispatch.
+func (s *Store) SetHandler(h StoreHandler) {
+	s.handler = h
 }
 
 // Get issues an asynchronous point read request for key tagged with reqID.
@@ -303,8 +288,8 @@ func (s *Store) SetOnStorageError(fn func(err error)) {
 func (s *Store) Get(reqID uint64, key []byte) error {
 	entry, ok := s.idx.Get(key)
 	if !ok {
-		if s.OnReadComplete != nil {
-			s.OnReadComplete(reqID, key, nil, quorumerr.ErrKeyNotFound)
+		if s.handler != nil {
+			s.handler.OnReadComplete(reqID, key, nil, quorumerr.ErrKeyNotFound)
 		}
 		return nil
 	}
@@ -323,11 +308,9 @@ func (s *Store) Get(reqID uint64, key []byte) error {
 	if err := s.rt.SubmitPread(fd, slot.Value.buf, uint64(entry.Offset), reqID); err != nil {
 		s.slots.Release(reqID)
 		s.bytePool.Return(slot.Value.buf)
-		if s.OnStorageError != nil {
-			s.OnStorageError(err)
-		}
-		if s.OnReadComplete != nil {
-			s.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: submitting read: %v", quorumerr.ErrStorageIO, err))
+		if s.handler != nil {
+			s.handler.OnStorageError(err)
+			s.handler.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: submitting read: %v", quorumerr.ErrStorageIO, err))
 		}
 		return err
 	}
@@ -351,8 +334,8 @@ func (s *Store) Put(reqID uint64, key []byte, val []byte) error {
 		// Stamp new epoch header at offset 0 of rotated segment
 		header := EncodeSegmentHeader(s.currentEpoch, StatusWriter)
 		if _, err := s.files[nextSeg].WriteAt(header, 0); err != nil {
-			if s.OnStorageError != nil {
-				s.OnStorageError(err)
+			if s.handler != nil {
+				s.handler.OnStorageError(err)
 			}
 		}
 
@@ -384,11 +367,9 @@ func (s *Store) Put(reqID uint64, key []byte, val []byte) error {
 	if err := s.rt.SubmitPwrite(fd, slot.Value.buf, uint64(offset), reqID); err != nil {
 		s.slots.Release(reqID)
 		s.bytePool.Return(slot.Value.buf)
-		if s.OnStorageError != nil {
-			s.OnStorageError(err)
-		}
-		if s.OnWriteComplete != nil {
-			s.OnWriteComplete(reqID, key, fmt.Errorf("%w: submitting write: %v", quorumerr.ErrStorageIO, err))
+		if s.handler != nil {
+			s.handler.OnStorageError(err)
+			s.handler.OnWriteComplete(reqID, key, fmt.Errorf("%w: submitting write: %v", quorumerr.ErrStorageIO, err))
 		}
 		return err
 	}
@@ -416,8 +397,8 @@ func (s *Store) Scan(scanID uint64, start, end []byte) error {
 	matched := keys[lo:hi]
 
 	if len(matched) == 0 {
-		if s.OnScanComplete != nil {
-			s.OnScanComplete(scanID, nil, nil)
+		if s.handler != nil {
+			s.handler.OnScanComplete(scanID, nil, nil)
 		}
 		return nil
 	}
@@ -440,8 +421,8 @@ func (s *Store) Scan(scanID uint64, start, end []byte) error {
 
 	if len(items) == 0 {
 		s.itemPool.Return(items)
-		if s.OnScanComplete != nil {
-			s.OnScanComplete(scanID, nil, nil)
+		if s.handler != nil {
+			s.handler.OnScanComplete(scanID, nil, nil)
 		}
 		return nil
 	}
@@ -486,8 +467,8 @@ func (s *Store) Scan(scanID uint64, start, end []byte) error {
 			if scanState.failedErr == nil {
 				scanState.failedErr = fmt.Errorf("%w: submitting scan chunk %d: %v", quorumerr.ErrStorageIO, chunkIdx, err)
 			}
-			if s.OnStorageError != nil {
-				s.OnStorageError(err)
+			if s.handler != nil {
+				s.handler.OnStorageError(err)
 			}
 		}
 	}
@@ -500,8 +481,8 @@ func (s *Store) Scan(scanID uint64, start, end []byte) error {
 		s.itemPool.Return(scanState.items)
 		scanState.arena.Release()
 		delete(s.inFlightScans, scanID)
-		if s.OnScanComplete != nil {
-			s.OnScanComplete(scanID, nil, scanState.failedErr)
+		if s.handler != nil {
+			s.handler.OnScanComplete(scanID, nil, scanState.failedErr)
 		}
 		s.scanPool.Return(results)
 	}
@@ -571,11 +552,9 @@ func (s *Store) Compact(compactID uint64, filter CompactFilter) error {
 		if _, err := f.ReadAt(buf, entry.Offset); err != nil {
 			s.bytePool.Return(buf)
 			err = fmt.Errorf("%w: reading record for compaction from seg %d: %v", quorumerr.ErrStorageIO, entry.SegID, err)
-			if s.OnStorageError != nil {
-				s.OnStorageError(err)
-			}
-			if s.OnCompactComplete != nil {
-				s.OnCompactComplete(compactID, CompactStats{}, err)
+			if s.handler != nil {
+				s.handler.OnStorageError(err)
+				s.handler.OnCompactComplete(compactID, CompactStats{}, err)
 			}
 			return err
 		}
@@ -634,11 +613,9 @@ func (s *Store) Compact(compactID uint64, filter CompactFilter) error {
 			s.bytePool.Return(buf)
 			s.bytePool.Return(writeBuf)
 			err = fmt.Errorf("%w: writing compacted record to seg %d: %v", quorumerr.ErrStorageIO, targetSeg, err)
-			if s.OnStorageError != nil {
-				s.OnStorageError(err)
-			}
-			if s.OnCompactComplete != nil {
-				s.OnCompactComplete(compactID, CompactStats{}, err)
+			if s.handler != nil {
+				s.handler.OnStorageError(err)
+				s.handler.OnCompactComplete(compactID, CompactStats{}, err)
 			}
 			return err
 		}
@@ -672,8 +649,8 @@ func (s *Store) Compact(compactID uint64, filter CompactFilter) error {
 		LiveKeyCount:   int64(s.idx.Len()),
 	}
 
-	if s.OnCompactComplete != nil {
-		s.OnCompactComplete(compactID, stats, nil)
+	if s.handler != nil {
+		s.handler.OnCompactComplete(compactID, stats, nil)
 	}
 	return nil
 }
@@ -683,8 +660,8 @@ func (s *Store) Compact(compactID uint64, filter CompactFilter) error {
 func (s *Store) HandleCompletion(ev reactor.Event) bool {
 	reqID := ev.UserData
 
-	if ev.Err != nil && s.OnStorageError != nil {
-		s.OnStorageError(ev.Err)
+	if ev.Err != nil && s.handler != nil {
+		s.handler.OnStorageError(ev.Err)
 	}
 
 	// 1. Check if it's a Scan chunk completion (distinguished by scanUserDataFlag on bit 62)
@@ -732,11 +709,11 @@ func (s *Store) HandleCompletion(ev reactor.Event) bool {
 				s.chunkPool.Return(scanState.chunks)
 				delete(s.inFlightScans, scanID)
 
-				if s.OnScanComplete != nil {
+				if s.handler != nil {
 					if failedErr != nil {
-						s.OnScanComplete(scanID, nil, failedErr)
+						s.handler.OnScanComplete(scanID, nil, failedErr)
 					} else {
-						s.OnScanComplete(scanID, results, nil)
+						s.handler.OnScanComplete(scanID, results, nil)
 					}
 				}
 				s.scanPool.Return(results)
@@ -767,41 +744,41 @@ func (s *Store) HandleCompletion(ev reactor.Event) bool {
 	switch op {
 	case opRead:
 		if ev.Err != nil {
-			if s.OnReadComplete != nil {
-				s.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: reading record: %v", quorumerr.ErrStorageIO, ev.Err))
+			if s.handler != nil {
+				s.handler.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: reading record: %v", quorumerr.ErrStorageIO, ev.Err))
 			}
 			return true
 		}
 		if int(ev.Result) != len(buf) {
-			if s.OnReadComplete != nil {
-				s.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: short read: got %d of %d bytes", quorumerr.ErrStorageIO, ev.Result, len(buf)))
+			if s.handler != nil {
+				s.handler.OnReadComplete(reqID, key, nil, fmt.Errorf("%w: short read: got %d of %d bytes", quorumerr.ErrStorageIO, ev.Result, len(buf)))
 			}
 			return true
 		}
 		_, valView, _, err := DecodeRecord(buf)
-		if s.OnReadComplete != nil {
-			// Detach value for caller callback safety
-			valCopy := append([]byte(nil), valView...)
-			s.OnReadComplete(reqID, key, valCopy, err)
+		// Detach value for caller callback safety
+		valCopy := append([]byte(nil), valView...)
+		if s.handler != nil {
+			s.handler.OnReadComplete(reqID, key, valCopy, err)
 		}
 		return true
 
 	case opWrite:
 		if ev.Err != nil {
-			if s.OnWriteComplete != nil {
-				s.OnWriteComplete(reqID, key, fmt.Errorf("%w: writing record: %v", quorumerr.ErrStorageIO, ev.Err))
+			if s.handler != nil {
+				s.handler.OnWriteComplete(reqID, key, fmt.Errorf("%w: writing record: %v", quorumerr.ErrStorageIO, ev.Err))
 			}
 			return true
 		}
 		if int(ev.Result) != int(slot.Value.length) {
-			if s.OnWriteComplete != nil {
-				s.OnWriteComplete(reqID, key, fmt.Errorf("%w: short write: wrote %d of %d bytes", quorumerr.ErrStorageIO, ev.Result, slot.Value.length))
+			if s.handler != nil {
+				s.handler.OnWriteComplete(reqID, key, fmt.Errorf("%w: short write: wrote %d of %d bytes", quorumerr.ErrStorageIO, ev.Result, slot.Value.length))
 			}
 			return true
 		}
 		s.idx.Set(key, indexEntry{SegID: slot.Value.segID, Offset: slot.Value.offset, Length: slot.Value.length})
-		if s.OnWriteComplete != nil {
-			s.OnWriteComplete(reqID, key, nil)
+		if s.handler != nil {
+			s.handler.OnWriteComplete(reqID, key, nil)
 		}
 		return true
 	}

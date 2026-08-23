@@ -8,8 +8,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/reactor"
@@ -72,7 +71,7 @@ func runInBackground(t *testing.T, r *reactor.Reactor) {
 	})
 }
 
-// --- fake storage.Storage (backs the local node) ---
+// --- fake adapter.Storage (backs the local node) ---
 
 type fakeStorage struct {
 	rt     *reactor.Reactor
@@ -81,8 +80,8 @@ type fakeStorage struct {
 	mu       sync.Mutex
 	putFail  bool
 	putDelay time.Duration
-	putCalls []*storage.SiblingSet
-	getResp  *storage.SiblingSet
+	putCalls []*adapter.SiblingSet
+	getResp  *adapter.SiblingSet
 	getErr   error
 	getDelay time.Duration
 }
@@ -97,7 +96,7 @@ func (s *fakeStorage) setPutBehavior(fail bool, delay time.Duration) {
 	s.putFail, s.putDelay = fail, delay
 }
 
-func (s *fakeStorage) setGetResponse(ss *storage.SiblingSet, err error, delay time.Duration) {
+func (s *fakeStorage) setGetResponse(ss *adapter.SiblingSet, err error, delay time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getResp, s.getErr, s.getDelay = ss, err, delay
@@ -109,7 +108,7 @@ func (s *fakeStorage) putCount() int {
 	return len(s.putCalls)
 }
 
-func (s *fakeStorage) Put(key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (s *fakeStorage) Put(key []byte, siblings *adapter.SiblingSet, done func(error)) {
 	s.mu.Lock()
 	s.putCalls = append(s.putCalls, siblings)
 	fail, delay := s.putFail, s.putDelay
@@ -129,7 +128,7 @@ func (s *fakeStorage) Put(key []byte, siblings *storage.SiblingSet, done func(er
 	fire()
 }
 
-func (s *fakeStorage) Get(key []byte, done func(*storage.SiblingSet, error)) {
+func (s *fakeStorage) Get(key []byte, done func(*adapter.SiblingSet, error)) {
 	s.mu.Lock()
 	resp, err, delay := s.getResp, s.getErr, s.getDelay
 	s.mu.Unlock()
@@ -142,14 +141,14 @@ func (s *fakeStorage) Get(key []byte, done func(*storage.SiblingSet, error)) {
 	fire()
 }
 
-func (s *fakeStorage) GetRaw(key []byte, done func(*storage.SiblingSet, error))      { s.Get(key, done) }
+func (s *fakeStorage) GetRaw(key []byte, done func(*adapter.SiblingSet, error))      { s.Get(key, done) }
 func (s *fakeStorage) Delete(key []byte, ctx vclock.VectorClock, done func(error))   { done(nil) }
-func (s *fakeStorage) Scan(start, end []byte, fn storage.ScanFunc, done func(error)) { done(nil) }
+func (s *fakeStorage) Scan(start, end []byte, fn adapter.ScanFunc, done func(error)) { done(nil) }
 func (s *fakeStorage) LocalNodeID() node.NodeID                                      { return s.nodeID }
-func (s *fakeStorage) Stats() storage.Stats                                          { return storage.Stats{} }
+func (s *fakeStorage) Stats() adapter.StorageStats                                   { return adapter.StorageStats{} }
 func (s *fakeStorage) Close() error                                                  { return nil }
 
-// --- fake transport.Transport (backs every non-local node) ---
+// --- fake adapter.Transport (backs every non-local node) ---
 
 type fakeTransport struct {
 	rt *reactor.Reactor
@@ -157,8 +156,8 @@ type fakeTransport struct {
 	mu       sync.Mutex
 	putFail  map[node.NodeID]bool
 	putDelay map[node.NodeID]time.Duration
-	putCalls map[node.NodeID][]*storage.SiblingSet
-	getResp  map[node.NodeID]*storage.SiblingSet
+	putCalls map[node.NodeID][]*adapter.SiblingSet
+	getResp  map[node.NodeID]*adapter.SiblingSet
 	getErr   map[node.NodeID]error
 	getDelay map[node.NodeID]time.Duration
 }
@@ -168,8 +167,8 @@ func newFakeTransport(rt *reactor.Reactor) *fakeTransport {
 		rt:       rt,
 		putFail:  make(map[node.NodeID]bool),
 		putDelay: make(map[node.NodeID]time.Duration),
-		putCalls: make(map[node.NodeID][]*storage.SiblingSet),
-		getResp:  make(map[node.NodeID]*storage.SiblingSet),
+		putCalls: make(map[node.NodeID][]*adapter.SiblingSet),
+		getResp:  make(map[node.NodeID]*adapter.SiblingSet),
 		getErr:   make(map[node.NodeID]error),
 		getDelay: make(map[node.NodeID]time.Duration),
 	}
@@ -182,7 +181,7 @@ func (f *fakeTransport) setPutBehavior(id node.NodeID, fail bool, delay time.Dur
 	f.putDelay[id] = delay
 }
 
-func (f *fakeTransport) setGetResponse(id node.NodeID, ss *storage.SiblingSet, err error, delay time.Duration) {
+func (f *fakeTransport) setGetResponse(id node.NodeID, ss *adapter.SiblingSet, err error, delay time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getResp[id] = ss
@@ -196,7 +195,7 @@ func (f *fakeTransport) putCount(id node.NodeID) int {
 	return len(f.putCalls[id])
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
 	f.mu.Lock()
 	f.putCalls[id] = append(f.putCalls[id], siblings)
 	fail, delay := f.putFail[id], f.putDelay[id]
@@ -216,7 +215,7 @@ func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *storage.
 	fire()
 }
 
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*storage.SiblingSet, error)) {
+func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
 	f.mu.Lock()
 	resp, err, delay := f.getResp[id], f.getErr[id], f.getDelay[id]
 	f.mu.Unlock()
@@ -232,10 +231,13 @@ func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*storage
 func (f *fakeTransport) Heartbeat(id node.NodeID, done func(error))             { done(nil) }
 func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) { done(nil, nil) }
 func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error))         { done(nil) }
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []transport.GossipEntry, done func([]transport.GossipEntry, error)) {
+func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
 	done(nil, nil)
 }
-func (f *fakeTransport) Close() error { return nil }
+func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
+func (f *fakeTransport) Close() error                           { return nil }
+
+var _ adapter.Transport = (*fakeTransport)(nil)
 
 // --- test setup ---
 
@@ -401,22 +403,22 @@ func TestGet_MergesConcurrentSiblings(t *testing.T) {
 		t.Fatalf("GetPreferenceList: %v", err)
 	}
 
-	siblingA := storage.Sibling{Value: []byte("a"), VClock: tickedClock("x")}
-	siblingB := storage.Sibling{Value: []byte("b"), VClock: tickedClock("y")}
-	setReplicaGet(c, st, tr, prefList[0], &storage.SiblingSet{Siblings: []storage.Sibling{siblingA}}, nil, 0)
-	setReplicaGet(c, st, tr, prefList[1], &storage.SiblingSet{Siblings: []storage.Sibling{siblingB}}, nil, 0)
+	siblingA := adapter.Sibling{Value: []byte("a"), VClock: tickedClock("x")}
+	siblingB := adapter.Sibling{Value: []byte("b"), VClock: tickedClock("y")}
+	setReplicaGet(c, st, tr, prefList[0], &adapter.SiblingSet{Siblings: []adapter.Sibling{siblingA}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[1], &adapter.SiblingSet{Siblings: []adapter.Sibling{siblingB}}, nil, 0)
 	// Third replica is never consulted before quorum resolves; give it
 	// something harmless in case it is.
-	setReplicaGet(c, st, tr, prefList[2], &storage.SiblingSet{Siblings: []storage.Sibling{siblingA}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[2], &adapter.SiblingSet{Siblings: []adapter.Sibling{siblingA}}, nil, 0)
 	runInBackground(t, rt)
 
 	done := make(chan struct {
-		sibs []storage.Sibling
+		sibs []adapter.Sibling
 		err  error
 	}, 1)
-	c.Get("k1", func(sibs []storage.Sibling, err error) {
+	c.Get("k1", func(sibs []adapter.Sibling, err error) {
 		done <- struct {
-			sibs []storage.Sibling
+			sibs []adapter.Sibling
 			err  error
 		}{sibs, err}
 	})
@@ -445,13 +447,13 @@ func TestGet_DropsDominatedSibling(t *testing.T) {
 	newer := older.Copy()
 	newer.Tick(prefList[0])
 
-	setReplicaGet(c, st, tr, prefList[0], &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("old"), VClock: older}}}, nil, 0)
-	setReplicaGet(c, st, tr, prefList[1], &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("new"), VClock: newer}}}, nil, 0)
-	setReplicaGet(c, st, tr, prefList[2], &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("new"), VClock: newer}}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[0], &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("old"), VClock: older}}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[1], &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("new"), VClock: newer}}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[2], &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("new"), VClock: newer}}}, nil, 0)
 	runInBackground(t, rt)
 
-	done := make(chan []storage.Sibling, 1)
-	c.Get("k1", func(sibs []storage.Sibling, err error) {
+	done := make(chan []adapter.Sibling, 1)
+	c.Get("k1", func(sibs []adapter.Sibling, err error) {
 		if err != nil {
 			t.Errorf("Get failed: %v", err)
 		}
@@ -485,13 +487,13 @@ func TestGet_TriggersReadRepairOnStaleReplica(t *testing.T) {
 	freshClock := staleClock.Copy()
 	freshClock.Tick(fresh)
 
-	setReplicaGet(c, st, tr, stale, &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("old"), VClock: staleClock}}}, nil, 0)
-	setReplicaGet(c, st, tr, fresh, &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("new"), VClock: freshClock}}}, nil, 0)
-	setReplicaGet(c, st, tr, prefList[2], &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("new"), VClock: freshClock}}}, nil, 0)
+	setReplicaGet(c, st, tr, stale, &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("old"), VClock: staleClock}}}, nil, 0)
+	setReplicaGet(c, st, tr, fresh, &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("new"), VClock: freshClock}}}, nil, 0)
+	setReplicaGet(c, st, tr, prefList[2], &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("new"), VClock: freshClock}}}, nil, 0)
 	runInBackground(t, rt)
 
 	done := make(chan struct{}, 1)
-	c.Get("k1", func(sibs []storage.Sibling, err error) {
+	c.Get("k1", func(sibs []adapter.Sibling, err error) {
 		if err != nil {
 			t.Errorf("Get failed: %v", err)
 		}
@@ -504,8 +506,8 @@ func TestGet_TriggersReadRepairOnStaleReplica(t *testing.T) {
 		t.Fatal("Get never called done")
 	}
 
-	// Read repair (engine/readrepair.ReadRepairer) only holds a
-	// transport.Transport, never storage.Storage, so it always repairs via
+	// Read repair (engine/readrepair.ReadRepairer) only holds an
+	// adapter.Transport, never adapter.Storage, so it always repairs via
 	// RemotePut even when the stale replica happens to be the local node.
 	if tr.putCount(stale) == 0 {
 		t.Fatalf("expected RemotePut to repair stale replica %s, got no calls", stale)
@@ -526,7 +528,7 @@ func TestGet_TimesOutWhenQuorumNeverReached(t *testing.T) {
 
 	start := time.Now()
 	done := make(chan error, 1)
-	c.Get("k1", func(_ []storage.Sibling, err error) {
+	c.Get("k1", func(_ []adapter.Sibling, err error) {
 		done <- err
 	})
 
@@ -545,7 +547,7 @@ func TestGet_TimesOutWhenQuorumNeverReached(t *testing.T) {
 
 // setReplicaGet configures node id's canned Get response, whether id is the
 // coordinator's local node (fakeStorage) or a remote one (fakeTransport).
-func setReplicaGet(c *Coordinator, st *fakeStorage, tr *fakeTransport, id node.NodeID, ss *storage.SiblingSet, err error, delay time.Duration) {
+func setReplicaGet(c *Coordinator, st *fakeStorage, tr *fakeTransport, id node.NodeID, ss *adapter.SiblingSet, err error, delay time.Duration) {
 	if id == localID {
 		st.setGetResponse(ss, err, delay)
 		return

@@ -6,12 +6,11 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
-	"goquorum.io/v2/engine/adapter/storage"
-	"goquorum.io/v2/engine/adapter/transport"
+	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 )
 
-// fakeTransport is a transport.Transport where only RemotePut is exercised
+// fakeTransport is a Transport where only RemotePut is exercised
 // by TriggerRepair; every other method is an unused no-op to satisfy the
 // interface.
 type fakeTransport struct {
@@ -19,23 +18,24 @@ type fakeTransport struct {
 	putCalls []node.NodeID
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *storage.SiblingSet, done func(error)) {
+func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
 	f.mu.Lock()
 	f.putCalls = append(f.putCalls, id)
 	f.mu.Unlock()
 	done(nil)
 }
 
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*storage.SiblingSet, error)) {
+func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
 	done(nil, nil)
 }
 func (f *fakeTransport) Heartbeat(id node.NodeID, done func(error))             { done(nil) }
 func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) { done(nil, nil) }
 func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error))         { done(nil) }
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []transport.GossipEntry, done func([]transport.GossipEntry, error)) {
+func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
 	done(nil, nil)
 }
-func (f *fakeTransport) Close() error { return nil }
+func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
+func (f *fakeTransport) Close() error                           { return nil }
 
 func (f *fakeTransport) calls() []node.NodeID {
 	f.mu.Lock()
@@ -58,10 +58,10 @@ func TestTriggerRepair_EnabledRepairsStaleReplica(t *testing.T) {
 	fresh := tickedClock("a")
 	stale := vclock.NewVectorClock() // Empty: dominated by fresh.
 
-	merged := []storage.Sibling{{Value: []byte("v"), VClock: fresh}}
+	merged := []adapter.Sibling{{Value: []byte("v"), VClock: fresh}}
 	responses := []ReplicaRead{
-		{NodeID: "replica-1", SiblingSet: &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("v"), VClock: fresh}}}},
-		{NodeID: "replica-2", SiblingSet: &storage.SiblingSet{Siblings: []storage.Sibling{{Value: nil, VClock: stale}}}},
+		{NodeID: "replica-1", SiblingSet: &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("v"), VClock: fresh}}}},
+		{NodeID: "replica-2", SiblingSet: &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: nil, VClock: stale}}}},
 	}
 
 	rr.TriggerRepair([]byte("k"), merged, responses)
@@ -79,9 +79,9 @@ func TestTriggerRepair_DisabledSkipsEntirely(t *testing.T) {
 	fresh := tickedClock("a")
 	stale := vclock.NewVectorClock()
 
-	merged := []storage.Sibling{{Value: []byte("v"), VClock: fresh}}
+	merged := []adapter.Sibling{{Value: []byte("v"), VClock: fresh}}
 	responses := []ReplicaRead{
-		{NodeID: "replica-2", SiblingSet: &storage.SiblingSet{Siblings: []storage.Sibling{{Value: nil, VClock: stale}}}},
+		{NodeID: "replica-2", SiblingSet: &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: nil, VClock: stale}}}},
 	}
 
 	rr.TriggerRepair([]byte("k"), merged, responses)
@@ -97,14 +97,14 @@ func TestTriggerRepair_ReplicaAlreadyDominatingIsNotRepaired(t *testing.T) {
 
 	upToDate := tickedClock("a")
 
-	merged := []storage.Sibling{{Value: []byte("v"), VClock: upToDate}}
+	merged := []adapter.Sibling{{Value: []byte("v"), VClock: upToDate}}
 	responses := []ReplicaRead{
-		{NodeID: "replica-1", SiblingSet: &storage.SiblingSet{Siblings: []storage.Sibling{{Value: []byte("v"), VClock: upToDate}}}},
+		{NodeID: "replica-1", SiblingSet: &adapter.SiblingSet{Siblings: []adapter.Sibling{{Value: []byte("v"), VClock: upToDate}}}},
 	}
 
 	rr.TriggerRepair([]byte("k"), merged, responses)
 
 	if calls := tr.calls(); len(calls) != 0 {
-		t.Fatalf("expected no repair call for a replica that already dominates merged, got %v", calls)
+		t.Fatalf("expected no repair calls when replica already dominates, got %v", calls)
 	}
 }
