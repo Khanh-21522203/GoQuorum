@@ -515,4 +515,47 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 6. Verified seamless composition in [`server/app/server.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/app/server.go) and service APIs ([`server/api/admin.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/api/admin.go), [`server/api/internal.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/server/api/internal.go)).
 - [x] 7. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
 
+## Phase 25 — Implement Switch-Based FSM with Enter() Hooks in Coordinator & Remove Generic Statemachine
+
+### Context & Goals
+- Refactor all 3 state machines in `v2/engine/coordinator/coordinator.go` to use the switch-based `Handle()` + `Enter()` pattern:
+  1. Peer Liveness FSM (`Active` <-> `Degraded` <-> `Failed` -> `Leaving`) with `enterPeerState` updating `MembershipManager`, `HashRing`, and triggering hint replay.
+  2. Request Quorum Resolution FSM (`writeRequest` & `readRequest`) with `enterWriteRequestState` / `enterReadRequestState` handling timer cancellation and callback resolution.
+  3. Coordinator Subsystem Lifecycle FSM (`NotStarted` -> `Running` -> `Stopped`) with `enterLifecycle` managing build and timer arm/disarm.
+- Remove `v2/engine/statemachine` module/package as it is superseded by zero-allocation switch FSMs.
+- Verify 100% test pass across all workspace packages with 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Refactored [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go):
+  - Refactored Peer Liveness FSM to switch-based `handlePeerTrigger`, `transitionPeer`, and `enterPeerState` (updating `MembershipManager`, `HashRing`, and replaying hints on recovery).
+  - Refactored Request Quorum Resolution FSM (`writeRequest` & `readRequest`) to switch-based `handleWriteRequest` / `handleReadRequest` with zero heap allocations on client RPC paths.
+  - Refactored Coordinator Lifecycle FSM to switch-based `handleLifecycle`, `transitionLifecycle`, and `enterLifecycle`.
+  - Completely eliminated `statemachine.Machine` dependency from `coordinator.go`.
+- [x] 2. Removed `v2/engine/statemachine/` package (`doc.go`, `machine.go`, `machine_test.go`).
+- [x] 3. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+- [x] 4. Documented results in `tasks/todo.md`.
+
+## Phase 26 — Modularize Coordinator FSMs into Dedicated Source Files
+
+### Context & Goals
+- Split `v2/engine/coordinator/coordinator.go` into focused, cohesive source files:
+  1. `v2/engine/coordinator/coordinator.go`: Main struct, options, constructor, public client APIs (`Put`, `Get`, `Delete`), helper queries.
+  2. `v2/engine/coordinator/fsm_peer.go`: Peer liveness FSM (state, triggers, `handlePeerTrigger`, `transitionPeer`, `enterPeerState`, gossip handler).
+  3. `v2/engine/coordinator/fsm_request.go`: Quorum write/read request resolution FSM (`writeRequest`, `readRequest`, `handleWriteRequest`, `handleReadRequest`, `enterWriteRequestState`, `enterReadRequestState`).
+  4. `v2/engine/coordinator/fsm_lifecycle.go`: Subsystem lifecycle FSM (`coordinatorState`, `coordinatorTrigger`, `Start`, `Stop`, `armTimers`, `disarmTimers`).
+- Maintain 100% test coverage and verify zero regressions.
+
+### What shipped, real and tested
+- [x] 1. Created [`v2/engine/coordinator/fsm_peer.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_peer.go): encapsulates peer health transitions (`Active`, `Degraded`, `Failed`, `Leaving`), `ProbeHandler`, `GossipHandler`, and hint flush on recovery.
+- [x] 2. Created [`v2/engine/coordinator/fsm_request.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_request.go): encapsulates in-flight quorum write & read request lifecycles with zero allocations.
+- [x] 3. Created [`v2/engine/coordinator/fsm_lifecycle.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_lifecycle.go): encapsulates subsystem lifecycle (`Start`, `Stop`, timer management).
+- [x] 4. Created dedicated unit test suites:
+  - [`v2/engine/coordinator/fsm_peer_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_peer_test.go): tests peer state transitions (`Active` -> `Degraded` -> `Failed`), hint buffering during failure, automatic hint replay upon recovery, and gossip updates.
+  - [`v2/engine/coordinator/fsm_request_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_request_test.go): tests write/read request state transitions (`Awaiting` -> `Succeeded` / `Failed`), straggler handling after resolution, and client timeouts.
+  - [`v2/engine/coordinator/fsm_lifecycle_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_lifecycle_test.go): tests lifecycle startup (`NotStarted` -> `Running`), timer arming, and graceful shutdown (`Stop` -> `Stopped`).
+- [x] 5. Refactored [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go): trimmed down to core coordinator composition, client APIs (`Put`, `Get`, `Delete`), and membership query helpers.
+- [x] 6. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+
+
+
 
