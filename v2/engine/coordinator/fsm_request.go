@@ -32,11 +32,9 @@ const (
 type requestTrigger int
 
 const (
-	triggerReplicaSuccess    requestTrigger = iota // Replica call succeeded.
-	triggerReplicaFailure                          // Replica call failed.
-	triggerQuorumReached                           // Success count reached required quorum.
-	triggerQuorumUnreachable                       // Remaining replicas cannot achieve quorum.
-	triggerTimeout                                 // Client request deadline elapsed.
+	triggerReplicaSuccess requestTrigger = iota // Replica call succeeded.
+	triggerReplicaFailure                       // Replica call failed.
+	triggerTimeout                              // Client request deadline elapsed.
 )
 
 // writeRequest tracks in-flight Put or Delete replica fan-out across N replicas.
@@ -49,6 +47,62 @@ type writeRequest struct {
 	state        requestState
 	resolve      func(error) // Invoked once on quorum resolution.
 	timerID      reactor.TimerID
+}
+
+func newWriteRequest(id uint64, total, quorum int, resolve func(error)) *writeRequest {
+	return &writeRequest{
+		id:      id,
+		total:   total,
+		quorum:  quorum,
+		state:   requestAwaiting,
+		resolve: resolve,
+	}
+}
+
+func (req *writeRequest) handleResult(err error, op string, cancelTimer func(reactor.TimerID)) {
+	switch req.state {
+	case requestAwaiting:
+		if err == nil {
+			req.successCount++
+			if req.successCount >= req.quorum {
+				req.transitionTo(requestSucceeded, op, cancelTimer)
+			}
+		} else {
+			req.failureCount++
+			if req.total-req.failureCount < req.quorum {
+				req.transitionTo(requestFailed, op, cancelTimer)
+			}
+		}
+	case requestSucceeded, requestFailed:
+		if err == nil {
+			req.successCount++
+		} else {
+			req.failureCount++
+		}
+	}
+}
+
+func (req *writeRequest) handleTimeout(op string, cancelTimer func(reactor.TimerID)) {
+	if req.state == requestAwaiting {
+		req.transitionTo(requestFailed, op, cancelTimer)
+	}
+}
+
+func (req *writeRequest) transitionTo(next requestState, op string, cancelTimer func(reactor.TimerID)) {
+	req.state = next
+	if cancelTimer != nil {
+		cancelTimer(req.timerID)
+	}
+	switch next {
+	case requestSucceeded:
+		req.resolve(nil)
+	case requestFailed:
+		req.resolve(newQuorumError(op, req.quorum, req.successCount))
+	}
+}
+
+func (req *writeRequest) isDone() bool {
+	return req.successCount+req.failureCount >= req.total
 }
 
 // readRequest tracks in-flight Get replica fan-out across N replicas.
@@ -65,179 +119,67 @@ type readRequest struct {
 	timerID      reactor.TimerID
 }
 
-func (c *Coordinator) newWriteRequest(total, quorum int, op string, resolve func(error)) *writeRequest {
-	req := &writeRequest{
-		id:      c.nextRequestID(),
-		total:   total,
-		quorum:  quorum,
-		state:   requestAwaiting,
-		resolve: resolve,
-	}
-	c.writeRequests[req.id] = req
-	req.timerID = c.reactor.ScheduleOnce(c.timeoutConfig.ClientTimeout, func() {
-		c.onWriteTimeout(req.id, op)
-	})
-	return req
-}
-
-func (c *Coordinator) onWriteReplicaResult(reqID uint64, err error, op string) {
-	req, ok := c.writeRequests[reqID]
-	if !ok {
-		return
-	}
-
-	if err == nil {
-		c.handleWriteRequest(req, triggerReplicaSuccess, op)
-	} else {
-		c.handleWriteRequest(req, triggerReplicaFailure, op)
-	}
-
-	if req.successCount+req.failureCount >= req.total {
-		delete(c.writeRequests, req.id)
-	}
-}
-
-func (c *Coordinator) onWriteTimeout(reqID uint64, op string) {
-	req, ok := c.writeRequests[reqID]
-	if !ok || req.state != requestAwaiting {
-		return
-	}
-	delete(c.writeRequests, reqID)
-	c.handleWriteRequest(req, triggerTimeout, op)
-}
-
-func (c *Coordinator) handleWriteRequest(req *writeRequest, trigger requestTrigger, op string) {
-	switch req.state {
-	case requestAwaiting:
-		switch trigger {
-		case triggerReplicaSuccess:
-			req.successCount++
-			if req.successCount >= req.quorum {
-				c.transitionWriteRequest(req, requestSucceeded, op)
-			}
-		case triggerReplicaFailure:
-			req.failureCount++
-			if req.total-req.failureCount < req.quorum {
-				c.transitionWriteRequest(req, requestFailed, op)
-			}
-		case triggerTimeout:
-			c.transitionWriteRequest(req, requestFailed, op)
-		}
-
-	case requestSucceeded, requestFailed:
-		switch trigger {
-		case triggerReplicaSuccess:
-			req.successCount++
-		case triggerReplicaFailure:
-			req.failureCount++
-		}
-	}
-}
-
-func (c *Coordinator) transitionWriteRequest(req *writeRequest, next requestState, op string) {
-	req.state = next
-	c.enterWriteRequestState(req, next, op)
-}
-
-func (c *Coordinator) enterWriteRequestState(req *writeRequest, s requestState, op string) {
-	switch s {
-	case requestSucceeded:
-		c.reactor.CancelTimer(req.timerID)
-		req.resolve(nil)
-	case requestFailed:
-		c.reactor.CancelTimer(req.timerID)
-		req.resolve(newQuorumError(op, req.quorum, req.successCount))
-	}
-}
-
-func (c *Coordinator) newReadRequest(key []byte, total, quorum int, resolve func([]adapter.Sibling, error)) *readRequest {
-	req := &readRequest{
-		id:      c.nextRequestID(),
+func newReadRequest(id uint64, key []byte, total, quorum int, resolve func([]adapter.Sibling, error)) *readRequest {
+	return &readRequest{
+		id:      id,
 		key:     key,
 		total:   total,
 		quorum:  quorum,
 		state:   requestAwaiting,
 		resolve: resolve,
 	}
-	c.readRequests[req.id] = req
-	req.timerID = c.reactor.ScheduleOnce(c.timeoutConfig.ClientTimeout, func() {
-		c.onReadTimeout(req.id)
-	})
-	return req
 }
 
-func (c *Coordinator) onReadReplicaResult(reqID uint64, nodeID node.NodeID, ss *adapter.SiblingSet, err error) {
-	req, ok := c.readRequests[reqID]
-	if !ok {
-		return
-	}
-
+func (req *readRequest) handleResult(nodeID node.NodeID, ss *adapter.SiblingSet, err error, repair func(key []byte, merged []adapter.Sibling, responses []readrepair.ReplicaRead), cancelTimer func(reactor.TimerID)) {
 	req.responses = append(req.responses, readrepair.ReplicaRead{NodeID: nodeID, SiblingSet: ss, Error: err})
 
-	if err == nil {
-		c.handleReadRequest(req, triggerReplicaSuccess)
-	} else {
-		c.handleReadRequest(req, triggerReplicaFailure)
-	}
-
-	if req.successCount+req.failureCount >= req.total {
-		delete(c.readRequests, req.id)
-	}
-}
-
-func (c *Coordinator) onReadTimeout(reqID uint64) {
-	req, ok := c.readRequests[reqID]
-	if !ok || req.state != requestAwaiting {
-		return
-	}
-	delete(c.readRequests, reqID)
-	c.handleReadRequest(req, triggerTimeout)
-}
-
-func (c *Coordinator) handleReadRequest(req *readRequest, trigger requestTrigger) {
 	switch req.state {
 	case requestAwaiting:
-		switch trigger {
-		case triggerReplicaSuccess:
+		if err == nil {
 			req.successCount++
 			if req.successCount >= req.quorum {
-				c.transitionReadRequest(req, requestSucceeded)
+				req.transitionTo(requestSucceeded, repair, cancelTimer)
 			}
-		case triggerReplicaFailure:
+		} else {
 			req.failureCount++
 			if req.total-req.failureCount < req.quorum {
-				c.transitionReadRequest(req, requestFailed)
+				req.transitionTo(requestFailed, repair, cancelTimer)
 			}
-		case triggerTimeout:
-			c.transitionReadRequest(req, requestFailed)
 		}
-
 	case requestSucceeded, requestFailed:
-		switch trigger {
-		case triggerReplicaSuccess:
+		if err == nil {
 			req.successCount++
-		case triggerReplicaFailure:
+		} else {
 			req.failureCount++
 		}
 	}
 }
 
-func (c *Coordinator) transitionReadRequest(req *readRequest, next requestState) {
-	req.state = next
-	c.enterReadRequestState(req, next)
+func (req *readRequest) handleTimeout(repair func(key []byte, merged []adapter.Sibling, responses []readrepair.ReplicaRead), cancelTimer func(reactor.TimerID)) {
+	if req.state == requestAwaiting {
+		req.transitionTo(requestFailed, repair, cancelTimer)
+	}
 }
 
-func (c *Coordinator) enterReadRequestState(req *readRequest, s requestState) {
-	switch s {
+func (req *readRequest) transitionTo(next requestState, repair func(key []byte, merged []adapter.Sibling, responses []readrepair.ReplicaRead), cancelTimer func(reactor.TimerID)) {
+	req.state = next
+	if cancelTimer != nil {
+		cancelTimer(req.timerID)
+	}
+	switch next {
 	case requestSucceeded:
-		c.reactor.CancelTimer(req.timerID)
 		merged := mergeMaximalSiblings(req.responses)
-		c.readRepairer.TriggerRepair(req.key, merged, req.responses)
+		if repair != nil {
+			repair(req.key, merged, req.responses)
+		}
 		req.resolve(visibleSiblings(merged), nil)
 	case requestFailed:
-		c.reactor.CancelTimer(req.timerID)
 		req.resolve(nil, newQuorumError("get", req.quorum, req.successCount))
 	}
+}
+
+func (req *readRequest) isDone() bool {
+	return req.successCount+req.failureCount >= req.total
 }
 
 func mergeMaximalSiblings(responses []readrepair.ReplicaRead) []adapter.Sibling {

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"goquorum.io/v2/contracts/node"
@@ -12,7 +13,38 @@ import (
 	"goquorum.io/v2/engine/reactor"
 )
 
-func TestPeerFSM_TransitionsAndRecovery(t *testing.T) {
+func TestPeerFSM_PureIsolation(t *testing.T) {
+	var transitions []string
+	fsm := NewPeerFSM(3, func(id node.NodeID, from, to node.NodeState) {
+		transitions = append(transitions, fmt.Sprintf("%s:%v->%v", id, from, to))
+	})
+	fsm.AddPeer("node-1", node.NodeStateActive)
+
+	// Miss 1 -> Degraded
+	fsm.OnHeartbeatResult("node-1", errors.New("timeout"))
+	// Miss 2 -> Degraded (no transition event)
+	fsm.OnHeartbeatResult("node-1", errors.New("timeout"))
+	// Miss 3 -> Failed
+	fsm.OnHeartbeatResult("node-1", errors.New("timeout"))
+	// Recover -> Active
+	fsm.OnHeartbeatResult("node-1", nil)
+
+	want := []string{
+		"node-1:ACTIVE->DEGRADED",
+		"node-1:DEGRADED->FAILED",
+		"node-1:FAILED->ACTIVE",
+	}
+	if len(transitions) != len(want) {
+		t.Fatalf("transitions count = %d, want %d: %v", len(transitions), len(want), transitions)
+	}
+	for i, w := range want {
+		if transitions[i] != w {
+			t.Errorf("transition[%d] = %q, want %q", i, transitions[i], w)
+		}
+	}
+}
+
+func TestPeerFSM_TransitionsAndRecoveryWithCoordinator(t *testing.T) {
 	ring := hashring.NewHashRing(64)
 	_ = ring.AddNode(&node.Node{ID: "local", State: node.NodeStateActive})
 	_ = ring.AddNode(&node.Node{ID: "peer-1", State: node.NodeStateActive})
@@ -32,8 +64,8 @@ func TestPeerFSM_TransitionsAndRecovery(t *testing.T) {
 
 	c := NewCoordinator("local", ring, st, tr, mm, rt, cfg, WithFailureDetectorConfig(fdCfg))
 
-	peer := c.peers["peer-1"]
-	if peer.state != node.NodeStateActive {
+	peer, ok := c.peerFSM.GetPeer("peer-1")
+	if !ok || peer.state != node.NodeStateActive {
 		t.Fatalf("expected initial state Active, got %v", peer.state)
 	}
 

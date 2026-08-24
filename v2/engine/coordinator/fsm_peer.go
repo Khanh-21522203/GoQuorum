@@ -8,7 +8,9 @@ import (
 	"goquorum.io/v2/engine/membership"
 )
 
-// peerTrigger drives a single peer's NodeState transitions in Coordinator.
+// PeerTransitionHandler is invoked when a peer's NodeState changes.
+type PeerTransitionHandler func(id node.NodeID, from, to node.NodeState)
+
 type peerTrigger int
 
 const (
@@ -25,29 +27,67 @@ type peerEntry struct {
 	misses int
 }
 
-func (c *Coordinator) newPeerEntry(id node.NodeID) *peerEntry {
-	return &peerEntry{
-		id:     id,
-		health: &node.NodeHealth{NodeID: id, State: node.NodeStateActive},
-		state:  node.NodeStateActive,
+// PeerFSM is a pure finite state machine governing peer health states.
+// It has zero dependencies on Coordinator, Storage, or HashRing.
+type PeerFSM struct {
+	threshold    int
+	peers        map[node.NodeID]*peerEntry
+	onTransition PeerTransitionHandler
+}
+
+// NewPeerFSM creates a new PeerFSM with the given failure threshold and transition hook.
+func NewPeerFSM(threshold int, handler PeerTransitionHandler) *PeerFSM {
+	if threshold <= 0 {
+		threshold = 3
+	}
+	return &PeerFSM{
+		threshold:    threshold,
+		peers:        make(map[node.NodeID]*peerEntry),
+		onTransition: handler,
 	}
 }
 
-// OnHeartbeatResult implements failuredetector.ProbeHandler.
-func (c *Coordinator) OnHeartbeatResult(nodeID node.NodeID, err error) {
-	entry, ok := c.peers[nodeID]
+// AddPeer registers a new peer into the FSM with the given initial state.
+func (fsm *PeerFSM) AddPeer(id node.NodeID, initialState node.NodeState) {
+	if _, exists := fsm.peers[id]; !exists {
+		fsm.peers[id] = &peerEntry{
+			id:     id,
+			health: &node.NodeHealth{NodeID: id, State: initialState},
+			state:  initialState,
+		}
+	}
+}
+
+// GetPeer returns the peerEntry for id if present.
+func (fsm *PeerFSM) GetPeer(id node.NodeID) (*peerEntry, bool) {
+	p, ok := fsm.peers[id]
+	return p, ok
+}
+
+// Peers returns the underlying map of peers.
+func (fsm *PeerFSM) Peers() map[node.NodeID]*peerEntry {
+	return fsm.peers
+}
+
+// OnHeartbeatResult processes a heartbeat probe result for nodeID.
+func (fsm *PeerFSM) OnHeartbeatResult(nodeID node.NodeID, err error) {
+	entry, ok := fsm.peers[nodeID]
 	if !ok {
-		entry = c.newPeerEntry(nodeID)
-		c.peers[nodeID] = entry
+		entry = &peerEntry{
+			id:     nodeID,
+			health: &node.NodeHealth{NodeID: nodeID, State: node.NodeStateActive},
+			state:  node.NodeStateActive,
+		}
+		fsm.peers[nodeID] = entry
 	}
 
 	if err != nil {
 		entry.misses++
 		entry.health.MissedHeartbeats = entry.misses
-		if entry.misses >= c.failureDetectorConfig.FailureThreshold {
-			c.handlePeerTrigger(entry, triggerThresholdReached)
+		if entry.misses >= fsm.threshold {
+			fsm.handlePeerTrigger(entry, triggerThresholdReached)
 		} else {
-			c.handlePeerTrigger(entry, triggerHeartbeatMissed)
+			fsm.handlePeerTrigger(entry, triggerHeartbeatMissed)
 		}
 		return
 	}
@@ -55,19 +95,54 @@ func (c *Coordinator) OnHeartbeatResult(nodeID node.NodeID, err error) {
 	entry.misses = 0
 	entry.health.MissedHeartbeats = 0
 	entry.health.LastHeartbeat = time.Now()
-	c.handlePeerTrigger(entry, triggerHeartbeatOK)
+	fsm.handlePeerTrigger(entry, triggerHeartbeatOK)
 }
 
-func (c *Coordinator) handlePeerTrigger(p *peerEntry, trigger peerTrigger) {
+// OnGossipReceived processes gossiped peer states.
+func (fsm *PeerFSM) OnGossipReceived(entries []adapter.GossipEntry, localID node.NodeID) {
+	for _, entry := range entries {
+		if entry.NodeID == localID {
+			continue
+		}
+		status := membership.NodeStatus(entry.Status)
+		var targetState node.NodeState
+		switch status {
+		case membership.NodeStatusActive:
+			targetState = node.NodeStateActive
+		case membership.NodeStatusSuspect:
+			targetState = node.NodeStateDegraded
+		case membership.NodeStatusFailed:
+			targetState = node.NodeStateFailed
+		case membership.NodeStatusLeaving:
+			targetState = node.NodeStateLeaving
+		default:
+			targetState = node.NodeStateUnknown
+		}
+
+		p, ok := fsm.peers[entry.NodeID]
+		if !ok {
+			fsm.AddPeer(entry.NodeID, targetState)
+			if fsm.onTransition != nil {
+				fsm.onTransition(entry.NodeID, node.NodeStateUnknown, targetState)
+			}
+			continue
+		}
+		if p.state != targetState {
+			fsm.transitionPeer(p, targetState)
+		}
+	}
+}
+
+func (fsm *PeerFSM) handlePeerTrigger(p *peerEntry, trigger peerTrigger) {
 	switch p.state {
 	case node.NodeStateUnknown:
 		switch trigger {
 		case triggerHeartbeatOK:
-			c.transitionPeer(p, node.NodeStateActive)
+			fsm.transitionPeer(p, node.NodeStateActive)
 		case triggerHeartbeatMissed:
-			c.transitionPeer(p, node.NodeStateUnknown)
+			fsm.transitionPeer(p, node.NodeStateUnknown)
 		case triggerThresholdReached:
-			c.transitionPeer(p, node.NodeStateFailed)
+			fsm.transitionPeer(p, node.NodeStateFailed)
 		}
 
 	case node.NodeStateActive:
@@ -75,25 +150,25 @@ func (c *Coordinator) handlePeerTrigger(p *peerEntry, trigger peerTrigger) {
 		case triggerHeartbeatOK:
 			// stay Active
 		case triggerHeartbeatMissed:
-			c.transitionPeer(p, node.NodeStateDegraded)
+			fsm.transitionPeer(p, node.NodeStateDegraded)
 		case triggerThresholdReached:
-			c.transitionPeer(p, node.NodeStateFailed)
+			fsm.transitionPeer(p, node.NodeStateFailed)
 		}
 
 	case node.NodeStateDegraded:
 		switch trigger {
 		case triggerHeartbeatOK:
-			c.transitionPeer(p, node.NodeStateActive)
+			fsm.transitionPeer(p, node.NodeStateActive)
 		case triggerHeartbeatMissed:
 			// stay Degraded
 		case triggerThresholdReached:
-			c.transitionPeer(p, node.NodeStateFailed)
+			fsm.transitionPeer(p, node.NodeStateFailed)
 		}
 
 	case node.NodeStateFailed:
 		switch trigger {
 		case triggerHeartbeatOK:
-			c.transitionPeer(p, node.NodeStateActive)
+			fsm.transitionPeer(p, node.NodeStateActive)
 		case triggerHeartbeatMissed, triggerThresholdReached:
 			// stay Failed
 		}
@@ -101,70 +176,16 @@ func (c *Coordinator) handlePeerTrigger(p *peerEntry, trigger peerTrigger) {
 	case node.NodeStateLeaving:
 		switch trigger {
 		case triggerThresholdReached:
-			c.transitionPeer(p, node.NodeStateFailed)
+			fsm.transitionPeer(p, node.NodeStateFailed)
 		}
 	}
 }
 
-func (c *Coordinator) transitionPeer(p *peerEntry, next node.NodeState) {
+func (fsm *PeerFSM) transitionPeer(p *peerEntry, next node.NodeState) {
 	prev := p.state
 	p.state = next
 	p.health.State = next
-	c.enterPeerState(p, prev, next)
-}
-
-func (c *Coordinator) enterPeerState(p *peerEntry, from, to node.NodeState) {
-	switch to {
-	case node.NodeStateActive:
-		if c.membership != nil {
-			c.membership.UpdatePeerStatus(p.id, membership.NodeStatusActive)
-		}
-		_ = c.ring.UpdateNodeState(p.id, node.NodeStateActive)
-		if from == node.NodeStateFailed && c.handoff != nil {
-			c.handoff.Replay([]node.NodeID{p.id})
-		}
-	case node.NodeStateDegraded:
-		if c.membership != nil {
-			c.membership.UpdatePeerStatus(p.id, membership.NodeStatusSuspect)
-		}
-		_ = c.ring.UpdateNodeState(p.id, node.NodeStateDegraded)
-	case node.NodeStateFailed:
-		if c.membership != nil {
-			c.membership.UpdatePeerStatus(p.id, membership.NodeStatusFailed)
-		}
-		_ = c.ring.UpdateNodeState(p.id, node.NodeStateFailed)
-	case node.NodeStateLeaving:
-		if c.membership != nil {
-			c.membership.UpdatePeerStatus(p.id, membership.NodeStatusLeaving)
-		}
-		_ = c.ring.UpdateNodeState(p.id, node.NodeStateLeaving)
-	}
-}
-
-// OnGossipReceived implements gossip.GossipHandler.
-func (c *Coordinator) OnGossipReceived(peerID node.NodeID, entries []adapter.GossipEntry) {
-	if c.membership == nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.NodeID == c.nodeID {
-			continue
-		}
-		status := membership.NodeStatus(entry.Status)
-		c.membership.UpdatePeerStatus(entry.NodeID, status)
-		var nodeState node.NodeState
-		switch status {
-		case membership.NodeStatusActive:
-			nodeState = node.NodeStateActive
-		case membership.NodeStatusSuspect:
-			nodeState = node.NodeStateDegraded
-		case membership.NodeStatusFailed:
-			nodeState = node.NodeStateFailed
-		case membership.NodeStatusLeaving:
-			nodeState = node.NodeStateLeaving
-		default:
-			nodeState = node.NodeStateUnknown
-		}
-		_ = c.ring.UpdateNodeState(entry.NodeID, nodeState)
+	if fsm.onTransition != nil && prev != next {
+		fsm.onTransition(p.id, prev, next)
 	}
 }

@@ -555,3 +555,41 @@ func setReplicaGet(c *Coordinator, st *fakeStorage, tr *fakeTransport, id node.N
 	_ = c
 	tr.setGetResponse(id, ss, err, delay)
 }
+
+func TestCoordinator_StartAndStop(t *testing.T) {
+	c, _, _, _ := newTestCoordinator(t)
+	c.failureDetectorConfig.HeartbeatInterval = 100 * time.Millisecond
+	c.antiEntropyConfig.ScanInterval = 200 * time.Millisecond
+
+	if c.IsRunning() {
+		t.Fatal("expected IsRunning() to be false before Start()")
+	}
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	if !c.IsRunning() {
+		t.Fatal("expected IsRunning() to be true after Start()")
+	}
+	if c.heartbeatTimer == 0 {
+		t.Error("expected heartbeatTimer to be armed")
+	}
+	if c.antiEntropyTimer == 0 {
+		t.Error("expected antiEntropyTimer to be armed")
+	}
+
+	// Idempotent start
+	if err := c.Start(); err != nil {
+		t.Fatalf("redundant Start failed: %v", err)
+	}
+
+	c.Stop()
+
+	if c.IsRunning() {
+		t.Fatal("expected IsRunning() to be false after Stop()")
+	}
+
+	// Idempotent stop
+	c.Stop()
+}

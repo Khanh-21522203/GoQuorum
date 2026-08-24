@@ -556,6 +556,54 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 5. Refactored [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go): trimmed down to core coordinator composition, client APIs (`Put`, `Get`, `Delete`), and membership query helpers.
 - [x] 6. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
 
+## Phase 27 — Decouple FSMs into Standalone Pure Structs with Event Hook Callbacks
+
+### Context & Goals
+- Refactor state machines (`PeerFSM`, `LifecycleFSM`, `RequestTracker`) so they have **zero dependencies on Coordinator**:
+  - `PeerFSM`: Pure struct tracking peer states, firing `PeerTransitionHandler(id, from, to)`.
+  - `LifecycleFSM`: Pure struct tracking subsystem runtime states, firing `LifecycleTransitionHandler(from, to)`.
+  - `RequestTracker`: Pure request tracker managing write & read quorum state machines.
+- The `Coordinator` owns instances of these FSMs and registers event listener callbacks on them to execute side-effects (updating `MembershipManager`, `HashRing`, and flushing `HintedHandoff`).
+- Update unit tests and verify 100% test coverage with zero vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Refactored [`v2/engine/coordinator/fsm_peer.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_peer.go):
+  - Defined `PeerTransitionHandler func(id node.NodeID, from, to node.NodeState)`.
+  - Implemented standalone `PeerFSM` struct (`NewPeerFSM`, `AddPeer`, `GetPeer`, `Peers`, `OnHeartbeatResult`, `OnGossipReceived`).
+  - Zero dependencies on Coordinator, Storage, or HashRing.
+- [x] 2. Refactored [`v2/engine/coordinator/fsm_lifecycle.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_lifecycle.go):
+  - Defined `LifecycleTransitionHandler func(from, to coordinatorState) error`.
+  - Implemented standalone `LifecycleFSM` struct (`NewLifecycleFSM`, `Start`, `Stop`, `State`).
+  - Zero dependencies on Coordinator, Storage, or Timers.
+- [x] 3. Refactored [`v2/engine/coordinator/fsm_request.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_request.go):
+  - Decoupled `writeRequest` and `readRequest` into standalone request FSMs (`handleResult`, `handleTimeout`, `isDone`).
+- [x] 4. Updated [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go):
+  - Wired `peerFSM` and `lifecycleFSM` in `NewCoordinator`.
+  - Implemented event listeners `onPeerTransition` and `onLifecycleTransition` to execute cluster side-effects.
+- [x] 5. Updated unit tests ([`fsm_peer_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_peer_test.go), [`fsm_lifecycle_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_lifecycle_test.go), [`fsm_request_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/fsm_request_test.go)):
+  - Added pure isolation unit tests verifying FSM transitions without any Coordinator or IO dependencies.
+- [x] 6. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+- [x] 7. Documented results in `tasks/todo.md`.
+
+## Phase 28 — Replace LifecycleFSM with Idiomatic Plain Start() and Stop() Functions
+
+### Context & Goals
+- Simplify Coordinator subsystem lifecycle by replacing ceremonial `LifecycleFSM` with standard idiomatic Go `Start()` / `Stop()` methods guarded by simple state booleans (`started`, `stopped`).
+- Remove `v2/engine/coordinator/fsm_lifecycle.go` and `v2/engine/coordinator/fsm_lifecycle_test.go`.
+- Add lifecycle startup & shutdown tests directly into `coordinator_test.go`.
+- Run all workspace tests and verify 100% pass with 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Updated [`v2/engine/coordinator/coordinator.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator.go):
+  - Replaced `lifecycleFSM` with `started bool` and `stopped bool` plus `IsRunning() bool`.
+  - Implemented clean, idempotent `Start()` and `Stop()` methods.
+- [x] 2. Removed `v2/engine/coordinator/fsm_lifecycle.go` and `v2/engine/coordinator/fsm_lifecycle_test.go`.
+- [x] 3. Added `TestCoordinator_StartAndStop` to [`v2/engine/coordinator/coordinator_test.go`](file:///home/khanh.dao/Projects/SideProjects/GoQuorum/v2/engine/coordinator/coordinator_test.go).
+- [x] 4. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+- [x] 5. Documented results in `tasks/todo.md`.
+
+
+
 
 
 

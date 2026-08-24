@@ -48,8 +48,9 @@ type Coordinator struct {
 	gossip          *gossip.Gossip
 	handoff         *handoff.HintedHandoff
 
-	state coordinatorState
-	peers map[node.NodeID]*peerEntry
+	peerFSM *PeerFSM
+	started bool
+	stopped bool
 
 	heartbeatTimer   reactor.TimerID
 	gossipTimer      reactor.TimerID
@@ -115,10 +116,8 @@ func NewCoordinator(
 		gossipConfig:          gossip.GossipConfig{FanOut: 3},
 		gossipInterval:        time.Second,
 		handoffInterval:       30 * time.Second,
-		state:                 coordinatorNotStarted,
 		writeRequests:         make(map[uint64]*writeRequest),
 		readRequests:          make(map[uint64]*readRequest),
-		peers:                 make(map[node.NodeID]*peerEntry),
 	}
 
 	for _, opt := range opts {
@@ -131,13 +130,159 @@ func NewCoordinator(
 	c.gossip = gossip.NewGossip(tr, c, c.gossipConfig)
 	c.handoff = handoff.NewHintedHandoff(tr, id)
 
+	c.peerFSM = NewPeerFSM(c.failureDetectorConfig.FailureThreshold, c.onPeerTransition)
+
 	if mm != nil {
 		for _, p := range mm.GetAllPeers() {
-			c.peers[p] = c.newPeerEntry(p)
+			c.peerFSM.AddPeer(p, node.NodeStateActive)
 		}
 	}
 
 	return c
+}
+
+// Start starts background anti-entropy sync and arms master reactor timers.
+func (c *Coordinator) Start() error {
+	if c.started {
+		return nil
+	}
+	c.started = true
+
+	if err := c.antiEntropy.Build(); err != nil {
+		return err
+	}
+	c.armTimers()
+	return nil
+}
+
+// Stop stops background timers and subsystems.
+func (c *Coordinator) Stop() {
+	if !c.started || c.stopped {
+		return
+	}
+	c.stopped = true
+	c.disarmTimers()
+}
+
+// IsRunning reports whether the coordinator has been started and not yet stopped.
+func (c *Coordinator) IsRunning() bool {
+	return c.started && !c.stopped
+}
+
+func (c *Coordinator) onPeerTransition(id node.NodeID, from, to node.NodeState) {
+	switch to {
+	case node.NodeStateActive:
+		if c.membership != nil {
+			c.membership.UpdatePeerStatus(id, membership.NodeStatusActive)
+		}
+		_ = c.ring.UpdateNodeState(id, node.NodeStateActive)
+		if from == node.NodeStateFailed && c.handoff != nil {
+			c.handoff.Replay([]node.NodeID{id})
+		}
+	case node.NodeStateDegraded:
+		if c.membership != nil {
+			c.membership.UpdatePeerStatus(id, membership.NodeStatusSuspect)
+		}
+		_ = c.ring.UpdateNodeState(id, node.NodeStateDegraded)
+	case node.NodeStateFailed:
+		if c.membership != nil {
+			c.membership.UpdatePeerStatus(id, membership.NodeStatusFailed)
+		}
+		_ = c.ring.UpdateNodeState(id, node.NodeStateFailed)
+	case node.NodeStateLeaving:
+		if c.membership != nil {
+			c.membership.UpdatePeerStatus(id, membership.NodeStatusLeaving)
+		}
+		_ = c.ring.UpdateNodeState(id, node.NodeStateLeaving)
+	default:
+		panic("unhandled default case")
+	}
+}
+
+// OnHeartbeatResult implements failuredetector.ProbeHandler.
+func (c *Coordinator) OnHeartbeatResult(nodeID node.NodeID, err error) {
+	c.peerFSM.OnHeartbeatResult(nodeID, err)
+}
+
+// OnGossipReceived implements gossip.GossipHandler.
+func (c *Coordinator) OnGossipReceived(peerID node.NodeID, entries []adapter.GossipEntry) {
+	if c.membership != nil {
+		for _, entry := range entries {
+			if entry.NodeID != c.nodeID {
+				c.membership.UpdatePeerStatus(entry.NodeID, membership.NodeStatus(entry.Status))
+			}
+		}
+	}
+	c.peerFSM.OnGossipReceived(entries, c.nodeID)
+}
+
+func (c *Coordinator) armTimers() {
+	if c.failureDetector != nil && c.failureDetectorConfig.HeartbeatInterval > 0 {
+		c.heartbeatTimer = c.reactor.ScheduleEvery(c.failureDetectorConfig.HeartbeatInterval, func() {
+			c.failureDetector.Probe(c.getPeerIDs())
+		})
+	}
+	if c.gossip != nil && c.gossipInterval > 0 {
+		c.gossipTimer = c.reactor.ScheduleEvery(c.gossipInterval, func() {
+			c.gossip.Round(c.getPeerIDs(), c.getLocalGossipEntries())
+		})
+	}
+	if c.handoff != nil && c.handoffInterval > 0 {
+		c.handoffTimer = c.reactor.ScheduleEvery(c.handoffInterval, func() {
+			c.handoff.Replay(c.getActivePeerIDs())
+		})
+	}
+	if c.antiEntropy != nil && c.antiEntropyConfig.Enabled && c.antiEntropyConfig.ScanInterval > 0 {
+		c.antiEntropyTimer = c.reactor.ScheduleEvery(c.antiEntropyConfig.ScanInterval, func() {
+			c.antiEntropy.ScanTick(c.getPeerIDs())
+		})
+	}
+}
+
+func (c *Coordinator) disarmTimers() {
+	c.reactor.CancelTimer(c.heartbeatTimer)
+	c.reactor.CancelTimer(c.gossipTimer)
+	c.reactor.CancelTimer(c.handoffTimer)
+	c.reactor.CancelTimer(c.antiEntropyTimer)
+}
+
+func (c *Coordinator) getPeerIDs() []node.NodeID {
+	if c.membership != nil {
+		return c.membership.GetAllPeers()
+	}
+	return nil
+}
+
+func (c *Coordinator) getActivePeerIDs() []node.NodeID {
+	if c.membership != nil {
+		return c.membership.GetActivePeers()
+	}
+	return nil
+}
+
+func (c *Coordinator) getLocalGossipEntries() []adapter.GossipEntry {
+	if c.membership == nil {
+		return nil
+	}
+	peers := c.membership.GetPeers()
+	entries := make([]adapter.GossipEntry, 0, len(peers)+1)
+	entries = append(entries, adapter.GossipEntry{
+		NodeID:    c.nodeID,
+		Addr:      c.membership.GetAddress(c.nodeID),
+		Status:    uint8(c.membership.GetLocalStatus()),
+		Version:   1,
+		UpdatedAt: time.Now().Unix(),
+	})
+	for _, p := range peers {
+		entries = append(entries, adapter.GossipEntry{
+			NodeID:    p.ID,
+			Addr:      p.Addr,
+			Status:    uint8(p.Status),
+			Version:   1,
+			UpdatedAt: time.Now().Unix(),
+		})
+	}
+	return entries
 }
 
 // Membership returns the encapsulated MembershipManager.
@@ -205,12 +350,16 @@ func (c *Coordinator) doPut(key string, value []byte, causal vclock.VectorClock,
 		return
 	}
 
-	req := c.newWriteRequest(len(prefList), c.quorumConfig.W, "put", func(err error) {
+	req := newWriteRequest(c.nextRequestID(), len(prefList), c.quorumConfig.W, func(err error) {
 		if err != nil {
 			done(vclock.VectorClock{}, err)
 			return
 		}
 		done(tick, nil)
+	})
+	c.writeRequests[req.id] = req
+	req.timerID = c.reactor.ScheduleOnce(c.timeoutConfig.ClientTimeout, func() {
+		c.onWriteTimeout(req.id, "put")
 	})
 
 	keyBytes := []byte(key)
@@ -231,6 +380,26 @@ func (c *Coordinator) doPut(key string, value []byte, causal vclock.VectorClock,
 	}
 }
 
+func (c *Coordinator) onWriteReplicaResult(reqID uint64, err error, op string) {
+	req, ok := c.writeRequests[reqID]
+	if !ok {
+		return
+	}
+	req.handleResult(err, op, c.reactor.CancelTimer)
+	if req.isDone() {
+		delete(c.writeRequests, reqID)
+	}
+}
+
+func (c *Coordinator) onWriteTimeout(reqID uint64, op string) {
+	req, ok := c.writeRequests[reqID]
+	if !ok || req.state != requestAwaiting {
+		return
+	}
+	delete(c.writeRequests, reqID)
+	req.handleTimeout(op, c.reactor.CancelTimer)
+}
+
 // Get performs a quorum read of key, merging concurrent siblings and triggering read-repair.
 func (c *Coordinator) Get(key string, done func([]adapter.Sibling, error)) {
 	c.reactor.PostFunc(func() {
@@ -246,7 +415,11 @@ func (c *Coordinator) doGet(key string, done func([]adapter.Sibling, error)) {
 	}
 
 	keyBytes := []byte(key)
-	req := c.newReadRequest(keyBytes, len(prefList), c.quorumConfig.R, done)
+	req := newReadRequest(c.nextRequestID(), keyBytes, len(prefList), c.quorumConfig.R, done)
+	c.readRequests[req.id] = req
+	req.timerID = c.reactor.ScheduleOnce(c.timeoutConfig.ClientTimeout, func() {
+		c.onReadTimeout(req.id)
+	})
 
 	for _, nodeID := range prefList {
 		reqID, nid := req.id, nodeID
@@ -257,6 +430,26 @@ func (c *Coordinator) doGet(key string, done func([]adapter.Sibling, error)) {
 			c.transport.RemoteGet(nodeID, keyBytes, cb)
 		}
 	}
+}
+
+func (c *Coordinator) onReadReplicaResult(reqID uint64, nodeID node.NodeID, ss *adapter.SiblingSet, err error) {
+	req, ok := c.readRequests[reqID]
+	if !ok {
+		return
+	}
+	req.handleResult(nodeID, ss, err, c.readRepairer.TriggerRepair, c.reactor.CancelTimer)
+	if req.isDone() {
+		delete(c.readRequests, reqID)
+	}
+}
+
+func (c *Coordinator) onReadTimeout(reqID uint64) {
+	req, ok := c.readRequests[reqID]
+	if !ok || req.state != requestAwaiting {
+		return
+	}
+	delete(c.readRequests, reqID)
+	req.handleTimeout(c.readRepairer.TriggerRepair, c.reactor.CancelTimer)
 }
 
 // Delete performs a quorum tombstone write for key.
@@ -284,7 +477,11 @@ func (c *Coordinator) doDelete(key string, causal vclock.VectorClock, done func(
 		return
 	}
 
-	req := c.newWriteRequest(len(prefList), c.quorumConfig.W, "delete", done)
+	req := newWriteRequest(c.nextRequestID(), len(prefList), c.quorumConfig.W, done)
+	c.writeRequests[req.id] = req
+	req.timerID = c.reactor.ScheduleOnce(c.timeoutConfig.ClientTimeout, func() {
+		c.onWriteTimeout(req.id, "delete")
+	})
 
 	keyBytes := []byte(key)
 	for _, nodeID := range prefList {
