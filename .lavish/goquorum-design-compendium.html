@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GoQuorum Design Compendium</title>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("gq-design-theme");
+      var preferDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (saved === "dark" || (!saved && preferDark)) document.documentElement.classList.add("dark");
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ee;
+      --surface: #fffdf8;
+      --surface-2: #f1eee6;
+      --ink: #202124;
+      --muted: #5f646b;
+      --line: #d9d3c7;
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --accent-3: #2563eb;
+      --good: #166534;
+      --warn: #9a3412;
+      --bad: #991b1b;
+      --code-bg: #ebe7df;
+      --shadow: 0 18px 48px rgba(33, 29, 22, 0.12);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    html.dark {
+      color-scheme: dark;
+      --bg: #111316;
+      --surface: #191c20;
+      --surface-2: #22272d;
+      --ink: #ecf0f3;
+      --muted: #a9b1ba;
+      --line: #343b44;
+      --accent: #2dd4bf;
+      --accent-2: #f59e0b;
+      --accent-3: #60a5fa;
+      --good: #86efac;
+      --warn: #fdba74;
+      --bad: #fca5a5;
+      --code-bg: #0f1115;
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.58;
+    }
+    a { color: var(--accent-3); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 56px;
+      padding: 10px 24px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      backdrop-filter: blur(14px);
+    }
+    .brand {
+      font-weight: 800;
+      font-size: 16px;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .topbar nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .topbar nav a, .theme-toggle {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 7px 11px;
+      font: inherit;
+      font-size: 13px;
+      white-space: nowrap;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .topbar nav a:hover, .theme-toggle:hover {
+      border-color: var(--line);
+      background: var(--surface-2);
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 28px;
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 28px 24px 64px;
+    }
+    aside {
+      position: sticky;
+      top: 84px;
+      align-self: start;
+      max-height: calc(100vh - 104px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .toc-title {
+      padding: 16px 16px 8px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .toc {
+      display: grid;
+      gap: 2px;
+      padding: 0 8px 12px;
+    }
+    .toc a {
+      display: block;
+      border-radius: 6px;
+      padding: 7px 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .toc a:hover {
+      background: var(--surface-2);
+      color: var(--ink);
+      text-decoration: none;
+    }
+    main {
+      min-width: 0;
+      width: 100%;
+    }
+    .hero {
+      min-height: 360px;
+      display: grid;
+      align-content: center;
+      gap: 18px;
+      padding: 42px 0 22px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 { line-height: 1.18; margin: 0; }
+    h1 {
+      max-width: 840px;
+      font-size: clamp(42px, 7vw, 84px);
+      overflow-wrap: break-word;
+    }
+    .hero p {
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 19px;
+      margin: 0;
+      overflow-wrap: break-word;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+    .pill.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 36%, var(--line)); }
+    .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); }
+    section {
+      padding: 34px 0;
+      border-bottom: 1px solid var(--line);
+      scroll-margin-top: 76px;
+    }
+    section > h2 {
+      font-size: clamp(28px, 4vw, 44px);
+      margin-bottom: 12px;
+    }
+    section > p.lead {
+      max-width: 940px;
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card, details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+    }
+    .card { padding: 18px; }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .card h3, details summary {
+      font-weight: 800;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+    .card h4 {
+      margin-top: 16px;
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .card p, .card ul, .card ol { margin: 10px 0 0; }
+    .card p, .detail-body p, .detail-body li, td {
+      overflow-wrap: break-word;
+    }
+    .card ul, .card ol { padding-left: 20px; }
+    li + li { margin-top: 6px; }
+    details {
+      grid-column: span 12;
+      overflow: hidden;
+    }
+    summary {
+      cursor: pointer;
+      padding: 16px 18px;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after {
+      content: "+";
+      color: var(--accent);
+      font-weight: 900;
+    }
+    details[open] summary::after { content: "-"; }
+    .detail-body {
+      padding: 0 18px 18px;
+      color: var(--muted);
+    }
+    .detail-body h4 {
+      margin: 18px 0 6px;
+      color: var(--ink);
+      font-size: 15px;
+    }
+    .mini-diagram {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin: 16px 0;
+    }
+    .mini-node {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: var(--surface-2);
+      min-height: 92px;
+    }
+    .mini-node strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.25;
+      margin-bottom: 6px;
+    }
+    .mini-node span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .flow {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .diagram {
+      overflow: auto;
+      padding: 18px;
+    }
+    .diagram.wide svg {
+      min-width: 980px;
+    }
+    svg { width: 100%; max-width: 100%; height: auto; }
+    .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; rx: 8; }
+    .box-strong { fill: color-mix(in srgb, var(--accent) 12%, var(--surface)); stroke: var(--accent); }
+    .box-warn { fill: color-mix(in srgb, var(--accent-2) 14%, var(--surface)); stroke: var(--accent-2); }
+    .svg-text { fill: var(--ink); font-size: 14px; font-weight: 750; }
+    .svg-sub { fill: var(--muted); font-size: 12px; }
+    .edge { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      overflow-wrap: anywhere;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    code {
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow: auto;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      line-height: 1.45;
+      white-space: pre;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+      padding: 14px 16px;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      margin-top: 14px;
+    }
+    .callout.warn {
+      border-left-color: var(--accent-2);
+      background: color-mix(in srgb, var(--accent-2) 10%, var(--surface));
+    }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .status-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .status-item {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .tag {
+      width: fit-content;
+      min-width: 86px;
+      min-height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      line-height: 1;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--surface);
+      background: var(--muted);
+    }
+    .tag.ok { background: var(--good); }
+    .tag.fix { background: var(--warn); }
+    .tag.gap { background: var(--bad); }
+    footer {
+      padding: 32px 0;
+      color: var(--muted);
+    }
+    @media (max-width: 1040px) {
+      .layout { grid-template-columns: minmax(0, 1fr); }
+      aside { position: static; max-height: none; min-width: 0; }
+      main { min-width: 0; }
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
+    }
+    @media (max-width: 720px) {
+      .topbar { padding: 10px 14px; overflow: hidden; }
+      .layout {
+        width: 100vw;
+        max-width: 100vw;
+        padding: 20px 14px 48px;
+        justify-items: start;
+      }
+      main, section, .hero {
+        width: 100%;
+        max-width: 360px;
+      }
+      aside {
+        width: 100%;
+        max-width: calc(100vw - 28px);
+      }
+      .hero { min-height: 320px; }
+      body, main, section, .hero {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .eyebrow {
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      h1 {
+        font-size: 34px;
+        width: 100%;
+        max-width: 360px;
+      }
+      .hero p, section > p.lead, .card p, .detail-body p {
+        width: 100%;
+        max-width: 360px;
+      }
+      .hero p {
+        font-size: 17px;
+        overflow-wrap: anywhere;
+      }
+      .pill {
+        max-width: 100%;
+        white-space: normal;
+      }
+      .diagram {
+        max-width: 360px;
+      }
+      .status-item { grid-template-columns: 1fr; }
+      th, td { padding: 9px 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">GoQuorum</div>
+    <nav aria-label="Top navigation">
+      <a href="#overview">Overview</a>
+      <a href="#corrections">Verified Corrections</a>
+      <a href="#oop-architecture">OOP</a>
+      <a href="#data-plane">Data Plane</a>
+      <a href="#gossip-membership">Membership</a>
+      <a href="#api-routes">Operations</a>
+      <a href="#all-designs">All Designs</a>
+    </nav>
+    <button class="theme-toggle" type="button" id="themeToggle">Theme</button>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <div class="toc-title">Design Files</div>
+      <nav class="toc" aria-label="Design file table of contents">
+        <a href="#overview">Project overview</a>
+        <a href="#architecture-map">Architecture map</a>
+        <a href="#oop-architecture">OOP architecture</a>
+        <a href="#corrections">Verified corrections</a>
+        <a href="#api-routes">API and routes</a>
+        <a href="#storage-engine">Storage engine</a>
+        <a href="#vector-clocks">Vector clocks</a>
+        <a href="#consistent-hashing">Consistent hashing</a>
+        <a href="#quorum-replication">Quorum replication</a>
+        <a href="#gossip-membership">Gossip membership</a>
+        <a href="#failure-detection">Failure detection</a>
+        <a href="#read-repair">Read repair</a>
+        <a href="#anti-entropy">Anti-entropy</a>
+        <a href="#hinted-handoff">Hinted handoff</a>
+        <a href="#ttl-gc">TTL and tombstones</a>
+        <a href="#client-api">Client API</a>
+        <a href="#cluster-lifecycle">Cluster lifecycle</a>
+        <a href="#configuration">Configuration</a>
+        <a href="#tls-security">TLS security</a>
+        <a href="#backup-restore">Backup and restore</a>
+        <a href="#observability">Observability</a>
+        <a href="#cli-tool">CLI tool</a>
+        <a href="#diagrams">Diagrams inventory</a>
+      </nav>
+    </aside>
+
+    <main>
+      <section class="hero" id="overview">
+        <div class="eyebrow">Combined from design/*.md and verified against code</div>
+        <h1>GoQuorum Design Compendium</h1>
+        <p>
+          One reviewable HTML artifact for the project architecture: Dynamo-style quorum storage,
+          Pebble-backed siblings, vector clocks, consistent hashing, membership, failure recovery,
+          repair paths, public APIs, operational controls, and the places where current code differs
+          from the markdown design notes.
+        </p>
+        <div class="meta-row">
+          <span class="pill good">19 markdown files combined</span>
+          <span class="pill good">Code verification included</span>
+          <span class="pill warn">No codebase changes</span>
+          <span class="pill">Generated 2026-06-20</span>
+        </div>
+      </section>
+
+      <section id="architecture-map">
+        <h2>Architecture Map</h2>
+        <p class="lead">
+          GoQuorum runs as a single node process that exposes client gRPC and HTTP gateway APIs,
+          while inter-node coordination uses internal HTTP JSON routes. The design is a compact
+          Dynamo model: keys map to a preference list, coordinators fan out reads and writes to N
+          replicas, vector clocks retain concurrent versions, and background repair paths converge
+          replicas after failures.
+        </p>
+        <div class="grid">
+          <div class="card span-12 diagram" aria-label="GoQuorum architecture diagram">
+            <svg viewBox="0 0 1120 520" role="img" aria-labelledby="diag-title diag-desc">
+              <title id="diag-title">GoQuorum runtime architecture</title>
+              <desc id="diag-desc">Client APIs enter the server, pass to the coordinator, and fan out to storage, ring, membership, and repair systems.</desc>
+              <defs>
+                <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" fill="var(--muted)"></path>
+                </marker>
+              </defs>
+              <rect class="box box-strong" x="36" y="70" width="190" height="84"></rect>
+              <text class="svg-text" x="58" y="104">Application clients</text>
+              <text class="svg-sub" x="58" y="128">gRPC, HTTP gateway</text>
+              <rect class="box box-strong" x="36" y="198" width="190" height="84"></rect>
+              <text class="svg-text" x="58" y="232">quorumctl</text>
+              <text class="svg-sub" x="58" y="256">gRPC admin/client</text>
+
+              <rect class="box" x="306" y="54" width="236" height="238"></rect>
+              <text class="svg-text" x="330" y="92">Server</text>
+              <text class="svg-sub" x="330" y="118">GoQuorum + Admin gRPC</text>
+              <text class="svg-sub" x="330" y="140">grpc-gateway /v1/*</text>
+              <text class="svg-sub" x="330" y="162">health, metrics, debug</text>
+              <text class="svg-sub" x="330" y="184">/internal/* HTTP JSON</text>
+              <text class="svg-sub" x="330" y="206">/admin/ring/*</text>
+              <text class="svg-sub" x="330" y="228">/admin/backup, restore</text>
+
+              <rect class="box box-strong" x="630" y="54" width="230" height="120"></rect>
+              <text class="svg-text" x="652" y="92">Coordinator</text>
+              <text class="svg-sub" x="652" y="118">Get, Put, Delete</text>
+              <text class="svg-sub" x="652" y="140">quorum fanout and merge</text>
+
+              <rect class="box" x="630" y="220" width="230" height="94"></rect>
+              <text class="svg-text" x="652" y="256">Hash ring</text>
+              <text class="svg-sub" x="652" y="280">256 virtual nodes</text>
+
+              <rect class="box" x="630" y="354" width="230" height="94"></rect>
+              <text class="svg-text" x="652" y="390">Membership</text>
+              <text class="svg-sub" x="652" y="414">active, suspect, failed</text>
+
+              <rect class="box box-warn" x="928" y="54" width="156" height="120"></rect>
+              <text class="svg-text" x="950" y="92">Pebble</text>
+              <text class="svg-sub" x="950" y="118">SiblingSet bytes</text>
+              <text class="svg-sub" x="950" y="140">WAL and compaction</text>
+
+              <rect class="box" x="928" y="220" width="156" height="94"></rect>
+              <text class="svg-text" x="950" y="256">Repair</text>
+              <text class="svg-sub" x="950" y="280">read repair, Merkle</text>
+
+              <rect class="box" x="928" y="354" width="156" height="94"></rect>
+              <text class="svg-text" x="950" y="390">Recovery</text>
+              <text class="svg-sub" x="950" y="414">hints, TTL sweep</text>
+
+              <path class="edge" d="M226 112 L306 112"></path>
+              <path class="edge" d="M226 240 L306 240"></path>
+              <path class="edge" d="M542 114 L630 114"></path>
+              <path class="edge" d="M744 174 L744 220"></path>
+              <path class="edge" d="M744 314 L744 354"></path>
+              <path class="edge" d="M860 114 L928 114"></path>
+              <path class="edge" d="M860 266 L928 266"></path>
+              <path class="edge" d="M860 400 L928 400"></path>
+            </svg>
+          </div>
+          <div class="card span-4">
+            <h3>Runtime process</h3>
+            <p>
+              `cmd/quorum/main.go` loads YAML, opens Pebble, creates membership and the hash ring,
+              wires the HTTP/JSON inter-node client, builds the coordinator, starts gossip if enabled,
+              starts TTL sweeping, starts server listeners, starts coordinator services, then bootstraps
+              failure detection.
+            </p>
+          </div>
+          <div class="card span-4">
+            <h3>Data ownership</h3>
+            <p>
+              The hash ring maps string keys to a preference list of NodeIDs. The coordinator writes
+              to all N preferred replicas concurrently, evaluates W, and can use overflow nodes when
+              sloppy quorum is enabled.
+            </p>
+          </div>
+          <div class="card span-4">
+            <h3>Convergence</h3>
+            <p>
+              Read repair fixes stale replicas after reads, anti-entropy pushes bucketed key ranges
+              when Merkle roots diverge, hinted handoff replays failed writes when targets become
+              active, and TTL sweeper creates tombstones for expired siblings.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="oop-architecture">
+        <h2>OOP Architecture</h2>
+        <p class="lead">
+          This view maps the main Go structs and interfaces to their ownership/dependency shape.
+          It is intentionally closer to code than the system map: the process entry point composes
+          long-lived objects, the server adapts external protocols, and the coordinator owns the
+          Dynamo-style data and repair workflows.
+        </p>
+        <div class="grid">
+          <div class="card span-12 diagram wide" aria-label="GoQuorum OOP architecture diagram">
+            <svg viewBox="0 0 1180 620" role="img" aria-labelledby="oop-title oop-desc">
+              <title id="oop-title">GoQuorum object architecture</title>
+              <desc id="oop-desc">Composition root creates server, coordinator, storage, membership, gossip, failure detector, TTL sweeper, and repair components.</desc>
+              <defs>
+                <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" fill="var(--muted)"></path>
+                </marker>
+              </defs>
+
+              <rect class="box box-strong" x="38" y="250" width="172" height="98"></rect>
+              <text class="svg-text" x="60" y="286">main()</text>
+              <text class="svg-sub" x="60" y="310">composition root</text>
+              <text class="svg-sub" x="60" y="332">cmd/quorum</text>
+
+              <rect class="box" x="270" y="36" width="216" height="114"></rect>
+              <text class="svg-text" x="292" y="72">Config</text>
+              <text class="svg-sub" x="292" y="96">LoadConfig + defaults</text>
+              <text class="svg-sub" x="292" y="118">validation invariants</text>
+
+              <rect class="box box-warn" x="270" y="194" width="216" height="124"></rect>
+              <text class="svg-text" x="292" y="230">Storage</text>
+              <text class="svg-sub" x="292" y="254">Pebble wrapper</text>
+              <text class="svg-sub" x="292" y="276">SiblingSet encode</text>
+              <text class="svg-sub" x="292" y="298">tombstone GC</text>
+
+              <rect class="box" x="270" y="374" width="216" height="124"></rect>
+              <text class="svg-text" x="292" y="410">MembershipManager</text>
+              <text class="svg-sub" x="292" y="434">peer status table</text>
+              <text class="svg-sub" x="292" y="456">HTTP address lookup</text>
+              <text class="svg-sub" x="292" y="478">heartbeat state</text>
+
+              <rect class="box box-strong" x="556" y="54" width="244" height="156"></rect>
+              <text class="svg-text" x="578" y="90">Server</text>
+              <text class="svg-sub" x="578" y="114">ClientAPI adapter</text>
+              <text class="svg-sub" x="578" y="136">AdminAPI adapter</text>
+              <text class="svg-sub" x="578" y="158">InternalAPI adapter</text>
+              <text class="svg-sub" x="578" y="180">gRPC + gateway + HTTP</text>
+
+              <rect class="box box-strong" x="556" y="260" width="244" height="156"></rect>
+              <text class="svg-text" x="578" y="296">Coordinator</text>
+              <text class="svg-sub" x="578" y="320">Put, Get, Delete</text>
+              <text class="svg-sub" x="578" y="342">parallel quorum fanout</text>
+              <text class="svg-sub" x="578" y="364">sibling merge</text>
+              <text class="svg-sub" x="578" y="386">join and leave hooks</text>
+
+              <rect class="box" x="556" y="468" width="244" height="104"></rect>
+              <text class="svg-text" x="578" y="504">HashRing</text>
+              <text class="svg-sub" x="578" y="528">preference list</text>
+              <text class="svg-sub" x="578" y="550">extended overflow list</text>
+
+              <rect class="box" x="872" y="42" width="244" height="114"></rect>
+              <text class="svg-text" x="894" y="78">RPCClient interface</text>
+              <text class="svg-sub" x="894" y="102">RemotePut, RemoteGet</text>
+              <text class="svg-sub" x="894" y="124">Heartbeat, Merkle root</text>
+
+              <rect class="box" x="872" y="188" width="244" height="104"></rect>
+              <text class="svg-text" x="894" y="224">GRPCClient</text>
+              <text class="svg-sub" x="894" y="248">HTTP JSON implementation</text>
+              <text class="svg-sub" x="894" y="270">/internal/* routes</text>
+
+              <rect class="box" x="872" y="328" width="244" height="196"></rect>
+              <text class="svg-text" x="894" y="364">Coordinator-owned helpers</text>
+              <text class="svg-sub" x="894" y="390">ReadRepairer</text>
+              <text class="svg-sub" x="894" y="414">AntiEntropy + MerkleTree</text>
+              <text class="svg-sub" x="894" y="438">HintedHandoff</text>
+              <text class="svg-sub" x="894" y="462">TTLSweeper uses coordinator</text>
+              <text class="svg-sub" x="894" y="486">repair and recovery loops</text>
+
+              <rect class="box" x="270" y="536" width="216" height="68"></rect>
+              <text class="svg-text" x="292" y="574">Gossip + FailureDetector</text>
+              <text class="svg-sub" x="292" y="594">membership signal writers</text>
+
+              <path class="edge" style="marker-end:url(#arrow2)" d="M210 278 L270 98"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M210 294 L270 250"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M210 310 L270 428"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M486 252 L556 318"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M486 430 L556 356"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M486 570 L556 396"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M800 126 L872 98"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M994 156 L994 188"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M800 338 L872 240"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M800 356 L872 406"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M678 416 L678 468"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M556 114 L486 250"></path>
+              <path class="edge" style="marker-end:url(#arrow2)" d="M556 140 L486 430"></path>
+            </svg>
+          </div>
+          <div class="card span-4">
+            <h3>Composition root</h3>
+            <p>`cmd/quorum/main.go` constructs concrete dependencies directly. There is no container framework; object lifetime is explicit through start, defer, stop, and shutdown calls.</p>
+          </div>
+          <div class="card span-4">
+            <h3>Adapters</h3>
+            <p>`Server` owns protocol adapters. Client/Admin/Internal APIs translate gRPC, gateway, and HTTP JSON shapes into coordinator, storage, membership, and ring calls.</p>
+          </div>
+          <div class="card span-4">
+            <h3>Core domain object</h3>
+            <p>`Coordinator` is the central domain service. It connects quorum replication to ring placement, storage, RPC, membership, read repair, anti-entropy, and hinted handoff.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="corrections">
+        <h2>Verified Corrections</h2>
+        <p class="lead">
+          The markdown files are mostly aligned with implementation, but a few details have moved.
+          This artifact reflects the code as it exists now and calls out the differences explicitly.
+        </p>
+        <div class="status-list">
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>Startup order</strong><br>`cmd/quorum/main.go` starts gossip before the server, starts the TTL sweeper before the server, starts the coordinator after the server, and runs cluster bootstrap after coordinator start.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>Gossip conflict rule</strong><br>`NodeEntry.Version` exists and `SetSelf` increments it, but `Merge` currently accepts incoming state only when `incoming.UpdatedAt > existing.UpdatedAt`.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>Failure callbacks</strong><br>On failure, the callback marks the peer failed in gossip. On recovery, it triggers anti-entropy with the recovered peer. Hinted handoff replay is not called directly by the callback; it polls active membership.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>Config defaults</strong><br>The sample `config.yaml` is single-node N=1/R=1/W=1. Code defaults are N=3/R=2/W=2 if quorum config is omitted, and validation rejects N larger than configured cluster size.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>CLI surface</strong><br>`quorumctl` currently supports `get`, `put`, `delete`, `status`, `ring`, `key-info`, and `compact`. Backup/restore is exposed through HTTP admin handlers, not current CLI commands.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>Inter-node transport</strong><br>The type is named `GRPCClient`, but the implemented inter-node transport is HTTP JSON to `/internal/*` routes.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag fix">Corrected</span>
+            <div><strong>TTL reads</strong><br>`Storage.GetRaw` filters expired live siblings lazily. `Storage.Get` filters tombstones, and coordinator reads use raw local reads for repair visibility but remote internal reads currently use `Storage.Get`.</div>
+          </div>
+          <div class="status-item">
+            <span class="tag ok">Verified</span>
+            <div><strong>Dynamo flow present</strong><br>The current implementation includes preference-list routing, quorum fanout, vector-clock sibling merge, read repair, anti-entropy, hinted handoff, gossip membership, and failure detection.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="api-routes">
+        <h2>API And Route Surface</h2>
+        <p class="lead">
+          Public client calls are protobuf services exposed over gRPC and translated to `/v1/*`
+          HTTP routes by grpc-gateway. Internal cluster work is separate and uses direct HTTP JSON.
+        </p>
+        <div class="grid">
+          <div class="card span-6">
+            <h3>Public data API</h3>
+            <table>
+              <thead><tr><th>Operation</th><th>gRPC</th><th>HTTP gateway</th></tr></thead>
+              <tbody>
+                <tr><td>Get</td><td>`GoQuorum.Get`</td><td>`GET /v1/keys/{key}`</td></tr>
+                <tr><td>Put</td><td>`GoQuorum.Put`</td><td>`PUT /v1/keys/{key}`</td></tr>
+                <tr><td>Delete</td><td>`GoQuorum.Delete`</td><td>`DELETE /v1/keys/{key}`</td></tr>
+                <tr><td>Batch get</td><td>`GoQuorum.BatchGet`</td><td>`POST /v1/batch/get`</td></tr>
+                <tr><td>Batch put</td><td>`GoQuorum.BatchPut`</td><td>`POST /v1/batch/put`</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card span-6">
+            <h3>Public admin API</h3>
+            <table>
+              <thead><tr><th>Operation</th><th>gRPC</th><th>HTTP gateway</th></tr></thead>
+              <tbody>
+                <tr><td>Health</td><td>`GoQuorumAdmin.Health`</td><td>`GET /v1/admin/health`</td></tr>
+                <tr><td>Cluster info</td><td>`GoQuorumAdmin.ClusterInfo`</td><td>`GET /v1/admin/cluster`</td></tr>
+                <tr><td>Metrics</td><td>`GoQuorumAdmin.GetMetrics`</td><td>`GET /v1/admin/metrics`</td></tr>
+                <tr><td>Key info</td><td>`GoQuorumAdmin.KeyInfo`</td><td>`GET /v1/admin/keys/{key}`</td></tr>
+                <tr><td>Compaction</td><td>`GoQuorumAdmin.TriggerCompaction`</td><td>`POST /v1/admin/compaction`</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card span-6">
+            <h3>Internal HTTP JSON</h3>
+            <table>
+              <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td>`POST /internal/replicate`</td><td>Store a sibling on a target replica.</td></tr>
+                <tr><td>`POST /internal/read`</td><td>Read a key from a target replica.</td></tr>
+                <tr><td>`POST /internal/heartbeat`</td><td>Failure detector heartbeat.</td></tr>
+                <tr><td>`POST /internal/merkle-root`</td><td>Anti-entropy root comparison.</td></tr>
+                <tr><td>`POST /internal/notify-leaving`</td><td>Graceful leave notification.</td></tr>
+                <tr><td>`POST /internal/gossip/exchange`</td><td>Gossip state exchange when gossip is enabled.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card span-6">
+            <h3>Bare operational HTTP</h3>
+            <table>
+              <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td>`GET /health`, `/health/live`, `/health/ready`</td><td>Kubernetes-style health checks.</td></tr>
+                <tr><td>`GET /metrics`</td><td>Prometheus exposition handler.</td></tr>
+                <tr><td>`GET /debug/cluster`, `/debug/ring`</td><td>Debug cluster and ring views.</td></tr>
+                <tr><td>`/admin/ring/nodes`</td><td>List, join, and remove ring nodes.</td></tr>
+                <tr><td>`POST /admin/backup`, `/admin/restore`</td><td>Pebble checkpoint archive and restore helpers.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="data-plane">
+        <h2>Data Plane</h2>
+        <p class="lead">
+          The critical path is a coordinator-mediated quorum flow. Every key operation starts with
+          validation and preference-list lookup, then fans out to replicas, merges sibling state, and
+          returns either a causal context or a quorum error.
+        </p>
+        <div class="grid">
+          <div class="card span-6">
+            <h3>Write path</h3>
+            <div class="flow">
+              <div class="step"><span class="num">1</span><div>Validate key/value, copy the supplied vector clock, and tick the coordinator node ID.</div></div>
+              <div class="step"><span class="num">2</span><div>Create a `storage.Sibling` with value, vector clock, timestamp, tombstone=false, and optional `ExpiresAt`.</div></div>
+              <div class="step"><span class="num">3</span><div>Ask hash ring for `GetPreferenceList(key, N)` and concurrently write to every preferred replica.</div></div>
+              <div class="step"><span class="num">4</span><div>Local replica writes call `Storage.Put`; remote replica writes call HTTP JSON `/internal/replicate`.</div></div>
+              <div class="step"><span class="num">5</span><div>If successes reach W, update Merkle state asynchronously and return the new context. If strict quorum fails and sloppy quorum is enabled, try overflow nodes.</div></div>
+              <div class="step"><span class="num">6</span><div>Failed remote writes become hints for later replay.</div></div>
+            </div>
+          </div>
+          <div class="card span-6">
+            <h3>Read path</h3>
+            <div class="flow">
+              <div class="step"><span class="num">1</span><div>Validate key and compute the preference list.</div></div>
+              <div class="step"><span class="num">2</span><div>Fan out reads to all N replicas with per-replica timeout and early return after R successful responses.</div></div>
+              <div class="step"><span class="num">3</span><div>Local reads use `GetRaw` so tombstones are visible to repair. Remote internal reads return the peer's response from `/internal/read`.</div></div>
+              <div class="step"><span class="num">4</span><div>Merge all siblings by keeping causally maximal vector clocks and deduplicating equal clocks.</div></div>
+              <div class="step"><span class="num">5</span><div>Trigger read repair when enabled, then filter tombstones from the client result.</div></div>
+              <div class="step"><span class="num">6</span><div>Return siblings on success, `ErrKeyNotFound` if only tombstones or nothing remain, or a structured quorum error.</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="all-designs">
+        <h2>All Design Notes</h2>
+        <p class="lead">
+          The sections below combine the detailed intent of every markdown file in `design/`.
+          Corrections from the verification pass are already folded into the text.
+        </p>
+        <div class="grid">
+          <div class="card span-12 diagram wide" aria-label="Design notes visual index">
+            <svg viewBox="0 0 1100 360" role="img" aria-labelledby="design-map-title design-map-desc">
+              <title id="design-map-title">Visual index of GoQuorum design notes</title>
+              <desc id="design-map-desc">Design files grouped by API, consistency, membership, repair, and operations.</desc>
+              <defs>
+                <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" fill="var(--muted)"></path>
+                </marker>
+              </defs>
+              <rect class="box box-strong" x="36" y="34" width="174" height="270"></rect>
+              <text class="svg-text" x="58" y="70">API surface</text>
+              <text class="svg-sub" x="58" y="100">client-api.md</text>
+              <text class="svg-sub" x="58" y="124">cli-tool.md</text>
+              <text class="svg-sub" x="58" y="148">observability.md</text>
+              <text class="svg-sub" x="58" y="172">public gRPC</text>
+              <text class="svg-sub" x="58" y="196">HTTP gateway</text>
+
+              <rect class="box box-strong" x="262" y="34" width="190" height="270"></rect>
+              <text class="svg-text" x="284" y="70">Consistency core</text>
+              <text class="svg-sub" x="284" y="100">quorum-replication.md</text>
+              <text class="svg-sub" x="284" y="124">vector-clocks.md</text>
+              <text class="svg-sub" x="284" y="148">storage-engine.md</text>
+              <text class="svg-sub" x="284" y="172">siblings</text>
+              <text class="svg-sub" x="284" y="196">tombstones</text>
+
+              <rect class="box" x="504" y="34" width="190" height="270"></rect>
+              <text class="svg-text" x="526" y="70">Placement</text>
+              <text class="svg-sub" x="526" y="100">consistent-hashing.md</text>
+              <text class="svg-sub" x="526" y="124">gossip-membership.md</text>
+              <text class="svg-sub" x="526" y="148">failure-detection.md</text>
+              <text class="svg-sub" x="526" y="172">cluster-lifecycle.md</text>
+              <text class="svg-sub" x="526" y="196">ring + status</text>
+
+              <rect class="box" x="746" y="34" width="190" height="270"></rect>
+              <text class="svg-text" x="768" y="70">Convergence</text>
+              <text class="svg-sub" x="768" y="100">read-repair.md</text>
+              <text class="svg-sub" x="768" y="124">anti-entropy.md</text>
+              <text class="svg-sub" x="768" y="148">hinted-handoff.md</text>
+              <text class="svg-sub" x="768" y="172">ttl-tombstone-gc.md</text>
+              <text class="svg-sub" x="768" y="196">post-failure repair</text>
+
+              <rect class="box box-warn" x="988" y="34" width="86" height="270"></rect>
+              <text class="svg-text" x="1006" y="70">Ops</text>
+              <text class="svg-sub" x="1006" y="100">config</text>
+              <text class="svg-sub" x="1006" y="124">TLS</text>
+              <text class="svg-sub" x="1006" y="148">backup</text>
+              <text class="svg-sub" x="1006" y="172">restore</text>
+
+              <path class="edge" style="marker-end:url(#arrow3)" d="M210 170 L262 170"></path>
+              <path class="edge" style="marker-end:url(#arrow3)" d="M452 170 L504 170"></path>
+              <path class="edge" style="marker-end:url(#arrow3)" d="M694 170 L746 170"></path>
+              <path class="edge" style="marker-end:url(#arrow3)" d="M936 170 L988 170"></path>
+            </svg>
+          </div>
+        </div>
+
+        <details id="storage-engine" open>
+          <summary>Storage Engine</summary>
+          <div class="detail-body">
+            <p>
+              The storage engine wraps Pebble and persists each logical key as an encoded `SiblingSet`.
+              Each sibling carries a value, vector clock, Unix-second timestamp, tombstone flag, and
+              optional expiry timestamp. Storage owns key/value validation, vector-clock reconciliation,
+              sibling pruning, tombstone GC, metrics, and low-level Pebble lifecycle.
+            </p>
+            <div class="mini-diagram" aria-label="Storage engine write and read flow">
+              <div class="mini-node"><strong>Put request</strong><span>Validate key/value and read existing state through `GetRaw`.</span></div>
+              <div class="mini-node"><strong>Reconcile</strong><span>Use vector clocks to drop obsolete siblings and retain concurrent ones.</span></div>
+              <div class="mini-node"><strong>Persist</strong><span>Encode `SiblingSet`, prune metadata, then write to Pebble with sync policy.</span></div>
+              <div class="mini-node"><strong>Read paths</strong><span>`Get` hides tombstones; `GetRaw` keeps tombstones visible and filters expired live siblings.</span></div>
+              <div class="mini-node"><strong>Background GC</strong><span>Tombstone GC removes old delete markers after retention expires.</span></div>
+            </div>
+            <h4>Write behavior</h4>
+            <ul>
+              <li>`Storage.Put` validates key and sibling values, reads existing state with `GetRaw`, reconciles by vector-clock causality, deduplicates by clock string, prunes oversized clocks, and enforces sibling limits.</li>
+              <li>A new sibling supersedes an existing sibling when its vector clock happens after the existing clock. Concurrent siblings are retained.</li>
+              <li>Writes use Pebble `Sync` when `sync_writes` is true and `NoSync` otherwise.</li>
+              <li>Disk-full and I/O errors are classified into storage-domain errors where possible.</li>
+            </ul>
+            <h4>Read behavior</h4>
+            <ul>
+              <li>`Storage.Get` returns client-visible siblings after filtering tombstones.</li>
+              <li>`Storage.GetRaw` is for internal paths that need tombstones and lazy-filters expired live siblings.</li>
+              <li>Storage-level `Scan` walks raw Pebble entries and decodes sibling sets; callers decide how to interpret tombstones and TTL.</li>
+            </ul>
+            <h4>Background work</h4>
+            <ul>
+              <li>Tombstone GC runs when enabled, removes tombstones older than `tombstone_ttl_days`, rewrites keys with remaining siblings, or deletes keys whose only siblings were expired tombstones.</li>
+              <li>Pebble stats are surfaced through storage metrics and admin/debug endpoints.</li>
+            </ul>
+            <div class="callout warn"><strong>Verified nuance</strong>`Storage.Get` does not filter expired live siblings directly; TTL expiry is handled by `GetRaw` and the separate TTL sweeper.</div>
+          </div>
+        </details>
+
+        <details id="vector-clocks" open>
+          <summary>Vector Clocks</summary>
+          <div class="detail-body">
+            <p>
+              Vector clocks are the causal context for conflict detection. They are represented as
+              node counter maps and used in coordinator writes, sibling reconciliation, read merge,
+              delete tombstones, and CLI context tokens.
+            </p>
+            <div class="mini-diagram" aria-label="Vector clock lifecycle">
+              <div class="mini-node"><strong>Client context</strong><span>Read returns one or more sibling contexts to the caller.</span></div>
+              <div class="mini-node"><strong>Coordinator tick</strong><span>Write/delete copies context and increments the coordinator node counter.</span></div>
+              <div class="mini-node"><strong>Causality compare</strong><span>Happens-before removes obsolete siblings; concurrent clocks remain.</span></div>
+              <div class="mini-node"><strong>Prune</strong><span>Age and entry limits bound clock size before persistence.</span></div>
+              <div class="mini-node"><strong>Conflict result</strong><span>Multiple maximal clocks are returned as client-visible siblings.</span></div>
+            </div>
+            <ul>
+              <li>Client writes may provide a previous context. The coordinator copies it and ticks its own node ID before creating the new sibling.</li>
+              <li>`HappensBefore`, `HappensAfter`, and equality define whether one sibling dominates another or must coexist as a conflict.</li>
+              <li>Deletes require a non-empty context, tick the coordinator, and write a tombstone sibling so deletion participates in causal conflict resolution.</li>
+              <li>Pruning caps clock growth by age and maximum entries, trading exact long-tail ancestry for bounded metadata.</li>
+              <li>`quorumctl` exposes contexts as base64-encoded JSON so humans can pass a context from `get` or `put` into `delete`.</li>
+            </ul>
+            <div class="callout"><strong>Design invariant</strong>Conflict resolution is application-visible. GoQuorum detects concurrent siblings; it does not choose a winning value for the client.</div>
+          </div>
+        </details>
+
+        <details id="consistent-hashing" open>
+          <summary>Consistent Hashing</summary>
+          <div class="detail-body">
+            <p>
+              The hash ring spreads keys across configured members with virtual nodes. Each physical
+              node is inserted with 256 virtual nodes in current startup code, and key lookup returns
+              a NodeID preference list used by quorum reads and writes.
+            </p>
+            <div class="mini-diagram" aria-label="Consistent hashing placement flow">
+              <div class="mini-node"><strong>Key hash</strong><span>Coordinator hashes the string key onto the ring.</span></div>
+              <div class="mini-node"><strong>Clockwise walk</strong><span>Ring walks virtual nodes until it finds distinct physical NodeIDs.</span></div>
+              <div class="mini-node"><strong>Preference list</strong><span>First N nodes become the strict replica set for quorum work.</span></div>
+              <div class="mini-node"><strong>Overflow list</strong><span>When sloppy quorum is enabled, extra nodes can temporarily accept writes.</span></div>
+              <div class="mini-node"><strong>Rebalance</strong><span>Join/leave changes ring membership and relies on anti-entropy to move data.</span></div>
+            </div>
+            <ul>
+              <li>`GetPreferenceList(key string, N int)` returns the first N distinct physical NodeIDs clockwise from the key hash.</li>
+              <li>`GetExtendedPreferenceList(key, N, extra)` supports sloppy quorum by adding overflow candidates beyond the strict preference list.</li>
+              <li>`JoinNode` updates the ring and membership, then triggers anti-entropy to seed the new node.</li>
+              <li>`LeaveNode` drains data to remaining peers using synchronous anti-entropy before removing the node from ring and membership.</li>
+              <li>Debug and admin routes expose ring state and allow ring membership changes.</li>
+            </ul>
+            <div class="callout warn"><strong>Corrected signature</strong>The implementation uses string keys and returns `[]common.NodeID`, not node objects.</div>
+          </div>
+        </details>
+
+        <details id="quorum-replication" open>
+          <summary>Quorum Replication</summary>
+          <div class="detail-body">
+            <p>
+              Quorum replication is the main Dynamo mechanism. N is the replication factor, R is the
+              required read successes, and W is the required write successes. Strong read/write overlap
+              is guaranteed when R + W &gt; N.
+            </p>
+            <ul>
+              <li>Writes fan out to all N preferred replicas concurrently and succeed after W successful writes.</li>
+              <li>Reads fan out to all N preferred replicas and return early after R successful responses.</li>
+              <li>Replica timeouts are scoped separately from client request timeout.</li>
+              <li>Successful writes update anti-entropy's Merkle tree asynchronously.</li>
+              <li>Failed remote writes are stored as hints when hinted handoff is attached.</li>
+              <li>Quorum failures return a `common.QuorumError` with required count, achieved count, operation name, and replica errors.</li>
+            </ul>
+            <h4>Sloppy quorum</h4>
+            <p>
+              When enabled, strict preference-list failure can be supplemented by overflow nodes from
+              the extended preference list. Hints still target failed strict replicas so writes can be
+              returned home after recovery.
+            </p>
+          </div>
+        </details>
+
+        <details id="gossip-membership" open>
+          <summary>Gossip Membership</summary>
+          <div class="detail-body">
+            <p>
+              Gossip maintains and spreads node membership state over internal HTTP. The state map holds
+              `NodeEntry` records containing node ID, internal HTTP address, status, logical version,
+              and wall-clock update timestamp.
+            </p>
+            <ul>
+              <li>Gossip is configured through `gossip.enabled`, `fan_out`, and `interval`. Fanout defaults to 3 and interval to 1 second; enabled defaults false unless configured.</li>
+              <li>On every round, the node randomly selects up to fanout peers from membership and posts its local state to `/internal/gossip/exchange`.</li>
+              <li>The peer merges incoming state, returns its own state, and the caller merges the response.</li>
+              <li>Self entries are never overwritten by remote gossip.</li>
+              <li>When merge accepts a peer update, it also updates `MembershipManager` peer status.</li>
+              <li>Failure detector writes failed status into gossip via `MarkPeer`, which lets failure state propagate beyond the detector's local membership view.</li>
+            </ul>
+            <div class="callout warn"><strong>Corrected merge rule</strong>Although comments mention version-based LWW, current code uses `UpdatedAt` as the deciding field. `Version` is incremented by `SetSelf` but not used by `Merge` ordering.</div>
+          </div>
+        </details>
+
+        <details id="failure-detection" open>
+          <summary>Failure Detection</summary>
+          <div class="detail-body">
+            <p>
+              Failure detection sends periodic heartbeats to peers and updates membership status based
+              on success, failure, and configured threshold. It is bootstrapped after the server and
+              coordinator start so peers can call each other.
+            </p>
+            <ul>
+              <li>`FailureDetector.Start(peerIDs)` initializes peer health and starts a heartbeat loop.</li>
+              <li>Each heartbeat uses RPC client `Heartbeat`, which maps to internal HTTP `/internal/heartbeat`.</li>
+              <li>Success records heartbeat latency and, if the previous status was failed, detects partition heal and calls `OnNodeRecovery`.</li>
+              <li>Failure records a missed heartbeat and, when status crosses to failed, detects partition and calls `OnNodeFailed`.</li>
+              <li>Current wiring marks failed peers in gossip and triggers anti-entropy when a failed peer recovers.</li>
+            </ul>
+            <div class="callout"><strong>Operational consequence</strong>Failure detection feeds both membership status and recovery repair. It is not only observability; it changes what repair paths run.</div>
+          </div>
+        </details>
+
+        <details id="read-repair" open>
+          <summary>Read Repair</summary>
+          <div class="detail-body">
+            <p>
+              Read repair is request-triggered convergence. After a successful quorum read, the
+              coordinator merges siblings from replicas, then the read repairer compares each replica's
+              response with the merged result and writes missing or stale state back to replicas.
+            </p>
+            <div class="mini-diagram" aria-label="Read repair flow">
+              <div class="mini-node"><strong>Quorum read</strong><span>Coordinator collects successful replica responses after R is satisfied.</span></div>
+              <div class="mini-node"><strong>Merge siblings</strong><span>Keep causally maximal siblings and retain tombstones for repair visibility.</span></div>
+              <div class="mini-node"><strong>Compare replicas</strong><span>ReadRepairer finds replicas that missed the merged sibling set.</span></div>
+              <div class="mini-node"><strong>Repair write</strong><span>Stale replicas receive `RemotePut` through the same internal replication path.</span></div>
+              <div class="mini-node"><strong>Mode</strong><span>Can run async in the background or synchronously before returning.</span></div>
+            </div>
+            <ul>
+              <li>Read repair can run asynchronously or synchronously, controlled by config.</li>
+              <li>It uses the same internal remote write path as replication, so repaired siblings go through storage reconciliation on the target node.</li>
+              <li>The coordinator keeps tombstones visible during local raw reads so deletion can repair stale replicas.</li>
+              <li>Repair probability can be tuned; sample config uses probability 1.0.</li>
+            </ul>
+            <div class="callout"><strong>Design role</strong>Read repair improves hot-key convergence. Anti-entropy still covers cold keys that are not read.</div>
+          </div>
+        </details>
+
+        <details id="anti-entropy" open>
+          <summary>Anti-Entropy</summary>
+          <div class="detail-body">
+            <p>
+              Anti-entropy is the cold-data repair path. It maintains a Merkle tree over local storage
+              and periodically compares Merkle roots with peers. When roots differ, it scans a bucket
+              and pushes matching keys to the peer.
+            </p>
+            <div class="mini-diagram" aria-label="Anti-entropy flow">
+              <div class="mini-node"><strong>Build tree</strong><span>Startup scans storage and builds the local Merkle tree when enabled.</span></div>
+              <div class="mini-node"><strong>Schedule bucket</strong><span>Scan interval is spread across `2^merkle_depth` buckets.</span></div>
+              <div class="mini-node"><strong>Compare root</strong><span>Node asks peer for `/internal/merkle-root` and checks divergence.</span></div>
+              <div class="mini-node"><strong>Push bucket keys</strong><span>If roots differ, local keys in the bucket are sent with `RemotePut`.</span></div>
+              <div class="mini-node"><strong>Triggered sync</strong><span>Recovery and join call `TriggerWithPeer`; leave uses blocking `SyncWithPeers`.</span></div>
+            </div>
+            <ul>
+              <li>Startup builds the initial Merkle tree before scheduling exchanges when anti-entropy is enabled.</li>
+              <li>The scheduler divides `scan_interval` across `2^merkle_depth` buckets and exchanges one range per tick.</li>
+              <li>Current MVP exchanges with all peers rather than selecting only peers responsible for each range.</li>
+              <li>`exchangeWithPeer` compares root hashes through `/internal/merkle-root`; if different, it scans local storage and pushes keys in that bucket through remote put.</li>
+              <li>`TriggerWithPeer` runs all buckets asynchronously for one peer, used for node recovery and join seeding.</li>
+              <li>`SyncWithPeers` runs a blocking drain across all buckets and selected peers, used for graceful leave.</li>
+              <li>`OnKeyUpdate` and `OnKeyDelete` update Merkle state incrementally after successful writes and deletes.</li>
+            </ul>
+            <div class="callout warn"><strong>Implementation scope</strong>The Merkle exchange currently compares global roots before bucket push. It does not yet do recursive subtree diff to minimize transferred keys.</div>
+          </div>
+        </details>
+
+        <details id="hinted-handoff" open>
+          <summary>Hinted Handoff</summary>
+          <div class="detail-body">
+            <p>
+              Hinted handoff stores write payloads that failed to reach a target node, then replays them
+              when membership says that target is active again.
+            </p>
+            <ul>
+              <li>Hints are in-memory per target node and contain key, sibling set, and creation time.</li>
+              <li>Hints are not stored for self.</li>
+              <li>Per-node hint capacity is 1000; when full, the oldest hint is evicted.</li>
+              <li>Hints older than 24 hours are dropped during replay.</li>
+              <li>The replay loop runs every 30 seconds and attempts delivery only for targets whose membership status is active.</li>
+              <li>Successful remote puts remove hints; failed deliveries remain pending until expiry or later success.</li>
+            </ul>
+            <div class="callout warn"><strong>Operational limit</strong>Hints are process memory only. A node restart loses pending hints, so anti-entropy remains the durable recovery mechanism.</div>
+          </div>
+        </details>
+
+        <details id="ttl-gc" open>
+          <summary>TTL, Tombstones, And GC</summary>
+          <div class="detail-body">
+            <p>
+              TTL and deletion use tombstones so expiry participates in the same causal machinery as
+              explicit deletes. The system separates live-value expiry from tombstone retention.
+            </p>
+            <ul>
+              <li>`PutOptions.TTLSeconds` stores `ExpiresAt` on the sibling. Zero means no expiry.</li>
+              <li>`TTLSweeper` scans storage once per minute in current main wiring and rate-limits to 1000 deletes per sweep.</li>
+              <li>When a sibling is expired, the sweeper merges existing sibling clocks, ticks the coordinator node, and calls coordinator `Delete` so a tombstone is replicated with W quorum.</li>
+              <li>Tombstones remain visible internally for conflict resolution and repair.</li>
+              <li>Storage tombstone GC later drops tombstones after configured retention.</li>
+            </ul>
+            <div class="callout"><strong>Correct mental model</strong>TTL expiry produces a delete operation; tombstone GC is only the later cleanup of old delete markers.</div>
+          </div>
+        </details>
+
+        <details id="client-api" open>
+          <summary>Client API</summary>
+          <div class="detail-body">
+            <p>
+              The client API exposes byte-key/value operations, optional quorum overrides, optional
+              timeouts, and vector-clock contexts. The HTTP gateway maps REST-like routes onto the
+              same protobuf service.
+            </p>
+            <ul>
+              <li>Get returns repeated siblings. Multiple siblings mean unresolved conflict and include causal context for client resolution.</li>
+              <li>Put accepts value, optional prior context, optional W override, timeout override, and TTL seconds.</li>
+              <li>Delete requires context so deletion does not blindly erase concurrent writes.</li>
+              <li>Batch get/put provide convenience APIs but still preserve per-key result/error shape.</li>
+              <li>Admin key info returns per-replica state and preference list, useful for debugging repair and conflict behavior.</li>
+            </ul>
+            <h4>Error shape</h4>
+            <p>
+              Invalid keys/values, missing delete contexts, quorum failures, and storage errors should
+              surface as distinct failures. Quorum errors include the operation and replica errors so
+              callers can distinguish unavailable replicas from causal conflicts.
+            </p>
+          </div>
+        </details>
+
+        <details id="cluster-lifecycle" open>
+          <summary>Cluster Lifecycle</summary>
+          <div class="detail-body">
+            <p>
+              Cluster lifecycle covers node startup, join, leave, bootstrap, and graceful shutdown.
+              The current startup sequence is important because internal APIs must exist before
+              bootstrap heartbeats can succeed.
+            </p>
+            <div class="mini-diagram" aria-label="Cluster lifecycle flow">
+              <div class="mini-node"><strong>Configure</strong><span>Load YAML, apply defaults, validate node, members, quorum, and storage limits.</span></div>
+              <div class="mini-node"><strong>Construct</strong><span>Open storage, build membership, ring, RPC client, coordinator, detector, gossip.</span></div>
+              <div class="mini-node"><strong>Start loops</strong><span>Start gossip if enabled, TTL sweeper, server listeners, coordinator services.</span></div>
+              <div class="mini-node"><strong>Bootstrap</strong><span>Failure detector starts after server/coordinator are available for peer calls.</span></div>
+              <div class="mini-node"><strong>Change cluster</strong><span>Join seeds via anti-entropy; leave drains data before ring removal.</span></div>
+              <div class="mini-node"><strong>Shutdown</strong><span>Server stops, coordinator stops, graceful shutdown drains in-flight work.</span></div>
+            </div>
+            <h4>Actual startup order</h4>
+            <ol>
+              <li>Load and validate config.</li>
+              <li>Open storage and start storage tombstone GC if enabled.</li>
+              <li>Create membership manager and hash ring from configured static members.</li>
+              <li>Create HTTP/JSON inter-node client and coordinator.</li>
+              <li>Create failure detector.</li>
+              <li>Create gossip and call `gossip.Start()`; it returns immediately if disabled.</li>
+              <li>Wire failure detector callbacks to anti-entropy and gossip.</li>
+              <li>Create hinted handoff and attach it to coordinator.</li>
+              <li>Start TTL sweeper.</li>
+              <li>Create server, attach gossip, and start gRPC plus HTTP listeners.</li>
+              <li>Start coordinator services, including hinted handoff and anti-entropy.</li>
+              <li>Bootstrap cluster and start failure detector.</li>
+              <li>Wait for SIGTERM or SIGINT and shut down gracefully.</li>
+            </ol>
+            <h4>Join and leave</h4>
+            <ul>
+              <li>Join adds the node to ring and membership, then triggers anti-entropy with the new node for seeding.</li>
+              <li>Leave drains data to remaining peers with synchronous anti-entropy before removing the node.</li>
+              <li>Notify-leaving route updates membership status to leaving on peers.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details id="configuration" open>
+          <summary>Configuration</summary>
+          <div class="detail-body">
+            <p>
+              Configuration is loaded from YAML, defaults are applied, then invariants are validated.
+              It covers node identity, cluster members, quorum, storage, repair, anti-entropy,
+              connection, server, TLS, rate limiting, and gossip.
+            </p>
+            <ul>
+              <li>`node.node_id` is required, must be 1-64 chars, and can contain alphanumeric, underscore, and hyphen.</li>
+              <li>`cluster.members` must be non-empty and include self.</li>
+              <li>`quorum.N` cannot exceed configured cluster size.</li>
+              <li>Code default quorum is N=3/R=2/W=2, but sample `config.yaml` sets N=1/R=1/W=1 for single-node development.</li>
+              <li>Cluster heartbeat defaults: interval 1s, timeout 2s, failure threshold 5, bootstrap timeout 60s.</li>
+              <li>Server defaults: gRPC `:7070`, HTTP `:8080`.</li>
+              <li>Gossip defaults: fanout 3, interval 1s, enabled remains false unless set.</li>
+            </ul>
+            <div class="callout warn"><strong>Config footgun</strong>If quorum config is omitted in a single-node cluster, the default N=3 will fail validation because N exceeds cluster size.</div>
+          </div>
+        </details>
+
+        <details id="tls-security" open>
+          <summary>TLS Security</summary>
+          <div class="detail-body">
+            <p>
+              TLS configuration is shared across server and connection layers. The server can load
+              TLS credentials for gRPC, and the HTTP client can load a client TLS config for internal
+              calls when connection TLS is enabled.
+            </p>
+            <ul>
+              <li>Server TLS is applied as gRPC credentials when `server.tls.enabled` is true.</li>
+              <li>Connection TLS changes internal HTTP scheme to `https` and loads client TLS config.</li>
+              <li>If client TLS config loading fails, the internal client logs a warning and proceeds without TLS; callers will then see connection or certificate failures if peers require TLS.</li>
+              <li>The design goal is mTLS-capable public and inter-node traffic, but route-by-route authorization is not the dominant mechanism in current code.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details id="backup-restore" open>
+          <summary>Backup And Restore</summary>
+          <div class="detail-body">
+            <p>
+              Backup and restore wrap Pebble checkpointing and archive extraction. The operational
+              surface currently appears as bare HTTP handlers backed by `AdminAPI.BackupDB` and
+              `AdminAPI.RestoreDB`.
+            </p>
+            <ul>
+              <li>`POST /admin/backup` accepts `dest_dir` and returns the archive path.</li>
+              <li>`POST /admin/restore` accepts `archive_file` and `dest_data_dir` and returns status ok on success.</li>
+              <li>The design notes describe future or intended admin gRPC/CLI integration, but the current protobuf admin service does not include backup/restore RPCs.</li>
+              <li>Restore must be treated carefully operationally because replacing a live Pebble data directory requires lifecycle coordination outside the storage engine.</li>
+            </ul>
+            <div class="callout warn"><strong>Corrected surface</strong>Do not document backup/restore as current `quorumctl` commands. They are server HTTP admin routes today.</div>
+          </div>
+        </details>
+
+        <details id="observability" open>
+          <summary>Observability</summary>
+          <div class="detail-body">
+            <p>
+              Observability spans Prometheus metrics, admin health, cluster info, debug routes, and
+              structured domain counters across storage, coordinator, failure detector, and repair.
+            </p>
+            <ul>
+              <li>`/metrics` serves Prometheus exposition through `promhttp.Handler()`.</li>
+              <li>Admin `GetMetrics` also returns Prometheus-format metrics through the gRPC/gateway admin API.</li>
+              <li>Health checks include node ID, uptime, version, and component checks.</li>
+              <li>Coordinator metrics track read/write latency, request totals, success counts, quorum failures, and observed sibling counts.</li>
+              <li>Storage metrics track read/write latency, bytes read/written, corrupted reads, write errors, tombstone GC, vector-clock pruning, and sibling pruning.</li>
+              <li>Failure detector metrics track heartbeat successes/failures and partition suspected/healed events.</li>
+              <li>Anti-entropy metrics track exchanges, failures, scan duration, and keys exchanged.</li>
+            </ul>
+          </div>
+        </details>
+
+        <details id="cli-tool" open>
+          <summary>CLI Tool</summary>
+          <div class="detail-body">
+            <p>
+              `quorumctl` is a gRPC terminal client for data operations and operational inspection.
+              It connects to a node with `--addr`, creates both client and admin gRPC clients, and
+              prints human-readable results.
+            </p>
+            <table>
+              <thead><tr><th>Command</th><th>Current purpose</th></tr></thead>
+              <tbody>
+                <tr><td>`get &lt;key&gt;`</td><td>Fetch siblings and show context tokens.</td></tr>
+                <tr><td>`put &lt;key&gt; &lt;value&gt;`</td><td>Write a value and print the new context.</td></tr>
+                <tr><td>`delete &lt;key&gt; &lt;context&gt;`</td><td>Write a tombstone using a base64 JSON context.</td></tr>
+                <tr><td>`status`</td><td>Show node health and cluster status.</td></tr>
+                <tr><td>`ring`</td><td>Show ring or cluster placement information.</td></tr>
+                <tr><td>`key-info &lt;key&gt;`</td><td>Show replica detail and preference list for a key.</td></tr>
+                <tr><td>`compact`</td><td>Trigger Pebble compaction through admin API.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <details id="diagrams" open>
+          <summary>Diagrams Inventory</summary>
+          <div class="detail-body">
+            <p>
+              `design/diagrams.md` contains Mermaid diagrams for the same architecture. This HTML
+              artifact replaces the Mermaid dependency with self-contained structure and tables, while
+              preserving the major diagram viewpoints.
+            </p>
+            <ul>
+              <li>System context: clients, CLI, node process, storage, metrics.</li>
+              <li>Container/component: server, coordinator, storage, membership, repair, security, backup.</li>
+              <li>Write sequence: client, coordinator, hash ring, replicas, vector clock, quorum response.</li>
+              <li>Read sequence: fanout, merge, read repair, client sibling response.</li>
+              <li>Failure and recovery: heartbeat failure, gossip marking, hinted handoff, anti-entropy on recovery.</li>
+              <li>Maintenance: TTL tombstone creation, tombstone GC, Merkle exchange, compaction, backup/restore.</li>
+            </ul>
+            <div class="callout"><strong>Cross-reference</strong>The earlier `design/goquorum-architecture.html` remains the richer visual diagram. This file is the combined design compendium for review.</div>
+          </div>
+        </details>
+      </section>
+
+      <section id="source-map">
+        <h2>Source Map</h2>
+        <p class="lead">
+          The artifact was created by reading the design notes and checking the implementation files
+          most likely to contradict them. These paths are the primary anchors for future review.
+        </p>
+        <div class="grid">
+          <div class="card span-6">
+            <h3>Design inputs</h3>
+            <p>
+              `design/index.md`, `storage-engine.md`, `vector-clocks.md`, `consistent-hashing.md`,
+              `quorum-replication.md`, `read-repair.md`, `anti-entropy.md`, `hinted-handoff.md`,
+              `gossip-membership.md`, `failure-detection.md`, `cluster-lifecycle.md`,
+              `ttl-tombstone-gc.md`, `client-api.md`, `observability.md`, `configuration.md`,
+              `tls-security.md`, `backup-restore.md`, `cli-tool.md`, and `diagrams.md`.
+            </p>
+          </div>
+          <div class="card span-6">
+            <h3>Verification anchors</h3>
+            <p>
+              `cmd/quorum/main.go`, `cmd/quorumctl/main.go`, `api/proto/goquorum.proto`,
+              `internal/server/server.go`, `internal/server/internal_api.go`,
+              `internal/cluster/coordinator.go`, `internal/cluster/rpc_client.go`,
+              `internal/cluster/gossip.go`, `internal/cluster/failure_detector.go`,
+              `internal/cluster/anti_entropy.go`, `internal/cluster/hinted_handoff.go`,
+              `internal/cluster/ttl_sweeper.go`, `internal/config/*.go`, and
+              `internal/storage/engine.go`.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        This file is an HTML artifact for review. It intentionally does not modify GoQuorum runtime code.
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      var button = document.getElementById("themeToggle");
+      function label() {
+        button.textContent = document.documentElement.classList.contains("dark") ? "Light" : "Dark";
+      }
+      label();
+      button.addEventListener("click", function () {
+        document.documentElement.classList.toggle("dark");
+        localStorage.setItem("gq-design-theme", document.documentElement.classList.contains("dark") ? "dark" : "light");
+        label();
+      });
+    })();
+  </script>
+</body>
+</html>

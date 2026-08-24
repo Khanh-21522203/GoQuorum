@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoQuorum Architecture</title>
+<script>
+  (function () {
+    const saved = localStorage.getItem("goquorum-arch-theme");
+    const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.classList.toggle("dark", dark);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #f7f5ef;
+    --surface: #ffffff;
+    --surface-2: #efebe2;
+    --surface-3: #e4ded2;
+    --ink: #171716;
+    --body: #3f403d;
+    --muted: #77786f;
+    --line: #c9c3b6;
+    --line-soft: #ddd7cb;
+    --api: #4f7f94;
+    --api-soft: rgba(79, 127, 148, 0.13);
+    --core: #b75b42;
+    --core-soft: rgba(183, 91, 66, 0.13);
+    --repair: #7a8f53;
+    --repair-soft: rgba(122, 143, 83, 0.14);
+    --store: #a8833d;
+    --store-soft: rgba(168, 131, 61, 0.15);
+    --ops: #7d6aa6;
+    --ops-soft: rgba(125, 106, 166, 0.13);
+    --danger: #ac4742;
+    --zone: rgba(23, 23, 22, 0.025);
+    --shadow: rgba(30, 24, 16, 0.10);
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  html.dark {
+    --bg: #131413;
+    --surface: #1f211f;
+    --surface-2: #292b28;
+    --surface-3: #33352f;
+    --ink: #f8f5ec;
+    --body: #d5d0c4;
+    --muted: #999589;
+    --line: #4b4a43;
+    --line-soft: #33342f;
+    --api: #80afc2;
+    --api-soft: rgba(128, 175, 194, 0.16);
+    --core: #e08b70;
+    --core-soft: rgba(224, 139, 112, 0.16);
+    --repair: #a7ba7a;
+    --repair-soft: rgba(167, 186, 122, 0.18);
+    --store: #d1ad65;
+    --store-soft: rgba(209, 173, 101, 0.17);
+    --ops: #b2a0d5;
+    --ops-soft: rgba(178, 160, 213, 0.16);
+    --danger: #df7771;
+    --zone: rgba(248, 245, 236, 0.035);
+    --shadow: rgba(0, 0, 0, 0.26);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--body);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  .bar {
+    height: 72px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg);
+  }
+
+  .title h1 {
+    margin: 0;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 21px;
+    font-weight: 560;
+    line-height: 1.1;
+  }
+
+  .title .sub {
+    margin-top: 4px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .spacer { flex: 1; }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+
+  button {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .chip {
+    min-height: 29px;
+    padding: 6px 10px;
+    border-radius: 999px;
+  }
+
+  .chip:hover,
+  #themeToggle:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
+
+  .chip.on {
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+  }
+
+  #themeToggle {
+    min-height: 29px;
+    padding: 6px 10px;
+    border-radius: 7px;
+  }
+
+  .stage {
+    position: relative;
+    height: calc(100vh - 72px);
+    min-height: 0;
+  }
+
+  svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .zone rect {
+    fill: var(--zone);
+    stroke: var(--line-soft);
+    stroke-width: 1.2;
+    stroke-dasharray: 6 6;
+    rx: 16;
+  }
+
+  .zone .zt {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    fill: var(--muted);
+  }
+
+  .zone .zs {
+    font-family: var(--mono);
+    font-size: 9.2px;
+    fill: var(--muted);
+  }
+
+  .lane {
+    fill: none;
+    stroke: var(--line-soft);
+    stroke-width: 1;
+    stroke-dasharray: 3 7;
+  }
+
+  .node {
+    cursor: pointer;
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+
+  .node rect,
+  .node path.shell {
+    fill: var(--surface);
+    stroke: var(--line);
+    stroke-width: 1.45;
+    rx: 9;
+  }
+
+  .node:hover rect,
+  .node:hover path.shell,
+  .node.sel rect,
+  .node.sel path.shell {
+    stroke: var(--core);
+    stroke-width: 2;
+  }
+
+  .node .t {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 680;
+    fill: var(--ink);
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+
+  .node .m {
+    font-family: var(--mono);
+    font-size: 9.4px;
+    fill: var(--muted);
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+
+  .node .k {
+    font-family: var(--mono);
+    font-size: 8.8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+
+  .node.api rect { fill: var(--api-soft); stroke: var(--api); }
+  .node.core rect { fill: var(--core-soft); stroke: var(--core); }
+  .node.repair rect { fill: var(--repair-soft); stroke: var(--repair); }
+  .node.store rect { fill: var(--store-soft); stroke: var(--store); }
+  .node.ops rect { fill: var(--ops-soft); stroke: var(--ops); }
+  .node.external rect { stroke-dasharray: 6 4; }
+  .node.api .k { fill: var(--api); }
+  .node.core .k { fill: var(--core); }
+  .node.repair .k { fill: var(--repair); }
+  .node.store .k { fill: var(--store); }
+  .node.ops .k { fill: var(--ops); }
+  .node.external .k { fill: var(--muted); }
+
+  .edge {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.55;
+    opacity: 0.46;
+    marker-end: url(#arrow-muted);
+    transition: opacity 180ms ease, stroke 180ms ease;
+  }
+
+  .edge.thick { stroke-width: 2.2; }
+  .edge.dash { stroke-dasharray: 6 5; }
+  .edge.back { marker-end: none; marker-start: url(#arrow-muted); }
+
+  .elabel {
+    font-family: var(--mono);
+    font-size: 9.1px;
+    fill: var(--muted);
+    opacity: 0.62;
+    display: none;
+    transition: opacity 180ms ease, fill 180ms ease;
+    pointer-events: none;
+  }
+
+  .pulse {
+    fill: var(--core);
+    opacity: 0;
+  }
+
+  .stage.flowing .edge,
+  .stage.flowing .elabel {
+    opacity: 0.10;
+  }
+
+  .stage.flowing .node,
+  .stage.flowing .zone {
+    opacity: 0.26;
+  }
+
+  .stage.flowing .edge.lit {
+    opacity: 1;
+    stroke: var(--core);
+    marker-end: url(#arrow-core);
+    stroke-dasharray: 8 6;
+    animation: march 880ms linear infinite;
+  }
+
+  .stage.flowing .edge.lit.repairflow {
+    stroke: var(--repair);
+    marker-end: url(#arrow-repair);
+  }
+
+  .stage.flowing .edge.lit.apiflow {
+    stroke: var(--api);
+    marker-end: url(#arrow-api);
+  }
+
+  .stage.flowing .edge.lit.opsflow {
+    stroke: var(--ops);
+    marker-end: url(#arrow-ops);
+  }
+
+  .stage.flowing .node.lit,
+  .stage.flowing .zone.lit {
+    opacity: 1;
+  }
+
+  .stage.flowing .elabel.lit {
+    opacity: 1;
+    fill: var(--core);
+  }
+
+  .stage.flowing .elabel.lit.repairflow { fill: var(--repair); }
+  .stage.flowing .elabel.lit.apiflow { fill: var(--api); }
+  .stage.flowing .elabel.lit.opsflow { fill: var(--ops); }
+
+  .stage.flowing .pulse.lit {
+    opacity: 1;
+    animation: throb 950ms ease-in-out infinite alternate;
+  }
+
+  @keyframes march { to { stroke-dashoffset: -14; } }
+  @keyframes throb { from { r: 4; opacity: .55; } to { r: 8; opacity: .95; } }
+  @media (prefers-reduced-motion: reduce) {
+    .stage.flowing .edge.lit,
+    .stage.flowing .pulse.lit { animation: none; }
+  }
+
+  .detail,
+  .caption {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px var(--shadow);
+  }
+
+  .detail {
+    right: 16px;
+    bottom: 16px;
+    width: 354px;
+    padding: 14px 15px;
+    display: none;
+  }
+  .detail.show { display: block; }
+
+  .detail h2 {
+    margin: 0 0 2px;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 18px;
+    font-weight: 560;
+  }
+
+  .detail .meta {
+    margin-bottom: 9px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+  }
+
+  .detail p {
+    margin: 0;
+    font-size: 12.7px;
+    line-height: 1.55;
+  }
+
+  .detail code,
+  .caption code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--core);
+  }
+
+  .caption {
+    left: 16px;
+    bottom: 16px;
+    max-width: 485px;
+    display: none;
+    padding: 13px 15px;
+  }
+
+  .caption.show { display: block; }
+  .caption .name {
+    margin-bottom: 6px;
+    color: var(--core);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .caption ol {
+    margin: 0 0 0 18px;
+    padding: 0;
+  }
+  .caption li {
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  @media (max-width: 980px) {
+    body { overflow: auto; }
+    .bar { height: auto; align-items: flex-start; flex-wrap: wrap; }
+    .spacer { display: none; }
+    .chips { justify-content: flex-start; }
+    .stage { height: auto; min-height: 760px; }
+    svg { position: relative; min-width: 1280px; height: 760px; }
+    .detail,
+    .caption { position: static; width: auto; max-width: none; margin: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="title">
+    <h1>GoQuorum Architecture</h1>
+    <div class="sub">Dynamo-style KV store · quorum replication · repair loops · Pebble</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-flow="all">All</button>
+    <button class="chip" data-flow="dynamo">Dynamo</button>
+    <button class="chip" data-flow="write">Write</button>
+    <button class="chip" data-flow="read">Read</button>
+    <button class="chip" data-flow="gossip">Gossip</button>
+    <button class="chip" data-flow="repair">Repair</button>
+    <button class="chip" data-flow="ops">Ops</button>
+    <button class="chip" data-flow="startup">Startup</button>
+  </div>
+  <button id="themeToggle">Theme</button>
+</div>
+
+<main class="stage" id="stage">
+<svg viewBox="0 0 1680 980" preserveAspectRatio="xMidYMid meet" role="img" aria-label="GoQuorum distributed key-value store architecture">
+  <defs>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path>
+    </marker>
+    <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--core)"></path>
+    </marker>
+    <marker id="arrow-repair" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--repair)"></path>
+    </marker>
+    <marker id="arrow-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--api)"></path>
+    </marker>
+    <marker id="arrow-ops" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--ops)"></path>
+    </marker>
+  </defs>
+
+  <g class="zone" id="zone-clients" data-zone="clients">
+    <rect x="34" y="106" width="234" height="612"></rect>
+    <text class="zt" x="54" y="136">Clients</text>
+    <text class="zs" x="54" y="154">Go SDK · HTTP · CLI · benchmark</text>
+  </g>
+  <g class="zone" id="zone-node" data-zone="node">
+    <rect x="304" y="86" width="980" height="820"></rect>
+    <text class="zt" x="324" y="72">Single GoQuorum node process</text>
+    <text class="zs" x="324" y="90">main.go wires storage, cluster, APIs, repair loops</text>
+  </g>
+  <g class="zone" id="zone-api" data-zone="api">
+    <rect x="330" y="155" width="298" height="680"></rect>
+    <text class="zt" x="350" y="184">API layer</text>
+  </g>
+  <g class="zone" id="zone-core" data-zone="core">
+    <rect x="660" y="155" width="284" height="680"></rect>
+    <text class="zt" x="680" y="184">Core engine</text>
+  </g>
+  <g class="zone" id="zone-consistency" data-zone="consistency">
+    <rect x="975" y="155" width="280" height="680"></rect>
+    <text class="zt" x="995" y="184">Consistency loops</text>
+  </g>
+  <g class="zone" id="zone-peers" data-zone="peers">
+    <rect x="1320" y="156" width="324" height="438"></rect>
+    <text class="zt" x="1340" y="186">Peer nodes</text>
+    <text class="zs" x="1340" y="204">same process, different node_id</text>
+  </g>
+  <g class="zone" id="zone-ops" data-zone="ops">
+    <rect x="1320" y="636" width="324" height="270"></rect>
+    <text class="zt" x="1340" y="666">Observability stack</text>
+  </g>
+
+  <path class="lane" d="M642 155 L642 835"></path>
+  <path class="lane" d="M960 155 L960 835"></path>
+  <path class="lane" d="M1297 108 L1297 906"></path>
+
+  <!-- External clients -->
+  <g class="node external" data-k="app-client">
+    <rect x="58" y="176" width="186" height="82"></rect>
+    <text class="k" x="76" y="201">external</text>
+    <text class="t" x="76" y="223">Application client</text>
+    <text class="m" x="76" y="243">Go SDK / gRPC / HTTP</text>
+  </g>
+  <g class="node external" data-k="quorumctl">
+    <rect x="58" y="302" width="186" height="82"></rect>
+    <text class="k" x="76" y="327">tooling</text>
+    <text class="t" x="76" y="349">quorumctl</text>
+    <text class="m" x="76" y="369">data ops + admin inspect</text>
+  </g>
+  <g class="node external" data-k="benchmarks">
+    <rect x="58" y="428" width="186" height="82"></rect>
+    <text class="k" x="76" y="453">load test</text>
+    <text class="t" x="76" y="475">Benchmarks</text>
+    <text class="m" x="76" y="495">latency / QPS / lag</text>
+  </g>
+  <g class="node external" data-k="operators">
+    <rect x="58" y="554" width="186" height="82"></rect>
+    <text class="k" x="76" y="579">ops</text>
+    <text class="t" x="76" y="601">Operators</text>
+    <text class="m" x="76" y="621">health · debug · backup</text>
+  </g>
+
+  <!-- API layer -->
+  <g class="node api" data-k="grpc-server">
+    <rect x="352" y="202" width="228" height="74"></rect>
+    <text class="k" x="372" y="226">:7070 gRPC</text>
+    <text class="t" x="372" y="249">GoQuorum services</text>
+    <text class="m" x="372" y="268">client · admin · internal</text>
+  </g>
+  <g class="node api" data-k="http-gateway">
+    <rect x="352" y="306" width="228" height="74"></rect>
+    <text class="k" x="372" y="330">:8080 HTTP</text>
+    <text class="t" x="372" y="353">Gateway + mux</text>
+    <text class="m" x="372" y="372">/v1 · /internal · /admin</text>
+  </g>
+  <g class="node api" data-k="client-api">
+    <rect x="352" y="416" width="228" height="82"></rect>
+    <text class="k" x="372" y="440">data plane</text>
+    <text class="t" x="372" y="463">ClientAPI</text>
+    <text class="m" x="372" y="482">Get · Put · Delete · Batch</text>
+  </g>
+  <g class="node api" data-k="admin-api">
+    <rect x="352" y="532" width="228" height="82"></rect>
+    <text class="k" x="372" y="556">control plane</text>
+    <text class="t" x="372" y="579">AdminAPI</text>
+    <text class="m" x="372" y="598">health · metrics · key info</text>
+  </g>
+  <g class="node api" data-k="internal-api">
+    <rect x="352" y="648" width="228" height="82"></rect>
+    <text class="k" x="372" y="672">node RPC</text>
+    <text class="t" x="372" y="695">InternalAPI</text>
+    <text class="m" x="372" y="714">replicate · read · heartbeat</text>
+  </g>
+
+  <!-- Core -->
+  <g class="node core" data-k="coordinator">
+    <rect x="690" y="294" width="218" height="96"></rect>
+    <text class="k" x="710" y="318">quorum brain</text>
+    <text class="t" x="710" y="342">Coordinator</text>
+    <text class="m" x="710" y="362">N/R/W · parallel fanout</text>
+    <text class="m" x="710" y="380">key locks · in-flight drain</text>
+  </g>
+  <g class="node core" data-k="hashring">
+    <rect x="690" y="202" width="218" height="64"></rect>
+    <text class="k" x="710" y="226">placement</text>
+    <text class="t" x="710" y="249">HashRing</text>
+    <text class="m" x="710" y="268">256 vnodes / member</text>
+  </g>
+  <g class="node core" data-k="membership">
+    <rect x="690" y="426" width="218" height="74"></rect>
+    <text class="k" x="710" y="450">cluster view</text>
+    <text class="t" x="710" y="473">MembershipManager</text>
+    <text class="m" x="710" y="492">Active · Suspect · Failed</text>
+  </g>
+  <g class="node core" data-k="failure-detector">
+    <rect x="690" y="530" width="218" height="74"></rect>
+    <text class="k" x="710" y="554">liveness</text>
+    <text class="t" x="710" y="577">FailureDetector</text>
+    <text class="m" x="710" y="596">heartbeat · partition hints</text>
+  </g>
+  <g class="node core" data-k="rpc-client">
+    <rect x="690" y="634" width="218" height="74"></rect>
+    <text class="k" x="710" y="658">peer transport</text>
+    <text class="t" x="710" y="681">RPCClient</text>
+    <text class="m" x="710" y="700">HTTP/JSON transport</text>
+  </g>
+  <g class="node core" data-k="vclock">
+    <rect x="690" y="738" width="218" height="64"></rect>
+    <text class="k" x="710" y="762">causality</text>
+    <text class="t" x="710" y="785">Vector clocks</text>
+    <text class="m" x="710" y="804">dominates · concurrent</text>
+  </g>
+
+  <!-- Consistency and durability -->
+  <g class="node repair" data-k="read-repair">
+    <rect x="1004" y="202" width="218" height="74"></rect>
+    <text class="k" x="1024" y="226">on-read repair</text>
+    <text class="t" x="1024" y="249">ReadRepairer</text>
+    <text class="m" x="1024" y="268">push merged siblings</text>
+  </g>
+  <g class="node repair" data-k="anti-entropy">
+    <rect x="1004" y="306" width="218" height="84"></rect>
+    <text class="k" x="1024" y="330">background sync</text>
+    <text class="t" x="1024" y="353">AntiEntropy</text>
+    <text class="m" x="1024" y="372">bucket scheduler</text>
+    <text class="m" x="1024" y="389">post-recovery sync</text>
+  </g>
+  <g class="node repair" data-k="merkle">
+    <rect x="1004" y="426" width="218" height="74"></rect>
+    <text class="k" x="1024" y="450">divergence map</text>
+    <text class="t" x="1024" y="473">MerkleTree</text>
+    <text class="m" x="1024" y="492">1024 buckets · SHA256</text>
+  </g>
+  <g class="node repair" data-k="hinted-handoff">
+    <rect x="1004" y="530" width="218" height="84"></rect>
+    <text class="k" x="1024" y="554">availability buffer</text>
+    <text class="t" x="1024" y="577">HintedHandoff</text>
+    <text class="m" x="1024" y="596">in-memory hints</text>
+    <text class="m" x="1024" y="613">replay every 30s</text>
+  </g>
+  <g class="node repair" data-k="ttl-sweeper">
+    <rect x="1004" y="650" width="218" height="74"></rect>
+    <text class="k" x="1024" y="674">expiry</text>
+    <text class="t" x="1024" y="697">TTLSweeper</text>
+    <text class="m" x="1024" y="716">delete expired records</text>
+  </g>
+
+  <!-- Storage -->
+  <g class="node store" data-k="storage">
+    <rect x="690" y="848" width="218" height="74"></rect>
+    <text class="k" x="710" y="872">persistence API</text>
+    <text class="t" x="710" y="895">Storage Engine</text>
+    <text class="m" x="710" y="914">siblings · CRC32</text>
+  </g>
+  <g class="node store" data-k="pebble">
+    <rect x="1004" y="848" width="218" height="74"></rect>
+    <text class="k" x="1024" y="872">local disk</text>
+    <text class="t" x="1024" y="895">Pebble LSM</text>
+    <text class="m" x="1024" y="914">data_dir/node&lt;id&gt;</text>
+  </g>
+
+  <!-- Peer nodes -->
+  <g class="node external" data-k="peer-node">
+    <rect x="1360" y="226" width="236" height="88"></rect>
+    <text class="k" x="1380" y="250">remote replica</text>
+    <text class="t" x="1380" y="274">Peer GoQuorum node</text>
+    <text class="m" x="1380" y="294">InternalAPI + storage</text>
+  </g>
+  <g class="node external" data-k="peer-storage">
+    <rect x="1360" y="354" width="236" height="76"></rect>
+    <text class="k" x="1380" y="378">remote state</text>
+    <text class="t" x="1380" y="401">Replica Pebble DB</text>
+    <text class="m" x="1380" y="420">sibling sets per key</text>
+  </g>
+  <g class="node external" data-k="gossip-peer">
+    <rect x="1360" y="470" width="236" height="76"></rect>
+    <text class="k" x="1380" y="494">membership fanout</text>
+    <text class="t" x="1380" y="517">Gossip peer</text>
+    <text class="m" x="1380" y="536">/internal/gossip/exchange</text>
+  </g>
+
+  <!-- Configuration, security, ops -->
+  <g class="node ops" data-k="config">
+    <rect x="1012" y="92" width="214" height="54"></rect>
+    <text class="k" x="1030" y="114">yaml</text>
+    <text class="t" x="1030" y="136">Configuration</text>
+  </g>
+  <g class="node ops" data-k="tls">
+    <rect x="690" y="92" width="218" height="54"></rect>
+    <text class="k" x="710" y="114">security</text>
+    <text class="t" x="710" y="136">TLS / mTLS</text>
+  </g>
+  <g class="node ops" data-k="bootstrap">
+    <rect x="352" y="92" width="228" height="54"></rect>
+    <text class="k" x="372" y="114">lifecycle</text>
+    <text class="t" x="372" y="136">Bootstrap / shutdown</text>
+  </g>
+  <g class="node ops" data-k="backup">
+    <rect x="1012" y="758" width="210" height="64"></rect>
+    <text class="k" x="1030" y="782">snapshot</text>
+    <text class="t" x="1030" y="805">Backup / Restore</text>
+    <text class="m" x="1030" y="824">checkpoint · SHA256</text>
+  </g>
+  <g class="node external" data-k="prometheus">
+    <rect x="1360" y="694" width="236" height="58"></rect>
+    <text class="k" x="1380" y="716">metrics</text>
+    <text class="t" x="1380" y="738">Prometheus</text>
+  </g>
+  <g class="node external" data-k="loki">
+    <rect x="1360" y="776" width="236" height="58"></rect>
+    <text class="k" x="1380" y="798">logs</text>
+    <text class="t" x="1380" y="820">Loki + Promtail</text>
+  </g>
+  <g class="node external" data-k="grafana">
+    <rect x="1360" y="858" width="236" height="58"></rect>
+    <text class="k" x="1380" y="880">dashboards</text>
+    <text class="t" x="1380" y="902">Grafana</text>
+  </g>
+
+  <!-- Edges -->
+  <path class="edge apiflow" id="e-client-grpc" d="M244,217 C292,217 308,238 352,238"></path>
+  <path class="edge apiflow" id="e-client-http" d="M244,343 C298,343 306,343 352,343"></path>
+  <path class="edge opsflow" id="e-operator-http" d="M244,595 C296,595 312,573 352,573"></path>
+  <path class="edge opsflow" id="e-bench-grpc" d="M244,469 C292,469 306,260 352,252"></path>
+  <path class="edge apiflow" id="e-grpc-clientapi" d="M466,276 L466,416"></path>
+  <path class="edge apiflow" id="e-http-clientapi" d="M466,380 L466,416"></path>
+  <path class="edge opsflow" id="e-http-admin" d="M500,380 L500,532"></path>
+  <path class="edge repairflow" id="e-http-internal" d="M534,380 L534,648"></path>
+  <path class="edge thick" id="e-clientapi-coord" d="M580,457 C625,457 642,343 690,343"></path>
+  <path class="edge opsflow" id="e-admin-coord" d="M580,573 C626,573 646,376 690,371"></path>
+  <path class="edge opsflow" id="e-admin-membership" d="M580,573 C624,572 644,466 690,466"></path>
+  <path class="edge repairflow" id="e-internal-storage" d="M580,689 C628,713 641,873 690,885"></path>
+  <path class="edge repairflow" id="e-internal-gossip" d="M580,689 C632,681 642,570 690,567"></path>
+  <path class="edge" id="e-coord-ring" d="M800,294 L800,266"></path>
+  <path class="edge" id="e-coord-membership" d="M800,390 L800,426"></path>
+  <path class="edge" id="e-coord-rpc" d="M800,390 C800,470 800,558 800,634"></path>
+  <path class="edge" id="e-coord-vclock" d="M740,390 C705,480 705,694 740,738"></path>
+  <path class="edge thick" id="e-coord-storage" d="M805,390 C846,498 846,762 805,848"></path>
+  <path class="edge repairflow" id="e-coord-readrepair" d="M908,330 C952,302 966,244 1004,239"></path>
+  <path class="edge repairflow" id="e-coord-antientropy" d="M908,350 C952,350 966,348 1004,348"></path>
+  <path class="edge repairflow" id="e-coord-hints" d="M908,372 C958,440 972,566 1004,572"></path>
+  <path class="edge repairflow" id="e-ae-merkle" d="M1113,390 L1113,426"></path>
+  <path class="edge repairflow" id="e-ae-storage" d="M1046,390 C944,520 938,820 908,876"></path>
+  <path class="edge repairflow" id="e-merkle-storage" d="M1100,500 C1012,610 962,834 908,885"></path>
+  <path class="edge repairflow" id="e-ttl-storage" d="M1004,687 C950,702 924,848 908,884"></path>
+  <path class="edge opsflow" id="e-backup-pebble" d="M1117,822 L1117,848"></path>
+  <path class="edge" id="e-storage-pebble" d="M908,885 L1004,885"></path>
+  <path class="edge thick" id="e-rpc-peer" d="M908,672 C1100,672 1195,270 1360,270"></path>
+  <path class="edge repairflow" id="e-peer-storage" d="M1478,314 L1478,354"></path>
+  <path class="edge repairflow" id="e-rpc-peer-storage" d="M908,672 C1105,672 1198,395 1360,395"></path>
+  <path class="edge repairflow" id="e-readrepair-rpc" d="M1004,239 C938,276 930,618 908,672"></path>
+  <path class="edge repairflow" id="e-hints-rpc" d="M1004,572 C950,588 932,650 908,672"></path>
+  <path class="edge repairflow" id="e-ae-rpc" d="M1222,348 C1272,350 1274,270 1360,270"></path>
+  <path class="edge repairflow" id="e-merkle-peer" d="M1222,464 C1282,464 1298,392 1360,392"></path>
+  <path class="edge repairflow" id="e-fd-rpc" d="M908,568 C1060,568 1200,508 1360,508"></path>
+  <path class="edge repairflow" id="e-fd-membership" d="M690,568 C650,538 650,472 690,464"></path>
+  <path class="edge repairflow" id="e-gossip-peer" d="M908,568 C1062,555 1192,508 1360,508"></path>
+  <path class="edge opsflow" id="e-config-node" d="M1012,119 C920,118 790,144 800,202"></path>
+  <path class="edge opsflow" id="e-tls-servers" d="M690,119 C608,118 532,168 500,202"></path>
+  <path class="edge opsflow" id="e-bootstrap-membership" d="M466,146 C490,500 632,462 690,462"></path>
+  <path class="edge opsflow" id="e-bootstrap-fd" d="M580,119 C652,164 672,526 690,566"></path>
+  <path class="edge opsflow" id="e-admin-prom" d="M580,573 C930,760 1180,724 1360,724"></path>
+  <path class="edge opsflow" id="e-node-loki" d="M580,614 C905,822 1190,805 1360,805"></path>
+  <path class="edge opsflow" id="e-prom-grafana" d="M1478,752 L1478,858"></path>
+  <path class="edge opsflow" id="e-loki-grafana" d="M1478,834 L1478,858"></path>
+
+  <!-- Labels -->
+  <text class="elabel apiflow" data-e="e-client-grpc" x="282" y="204">gRPC Put/Get/Delete</text>
+  <text class="elabel apiflow" data-e="e-client-http" x="276" y="331">HTTP/JSON gateway</text>
+  <text class="elabel opsflow" data-e="e-operator-http" x="270" y="618">/health · /debug · /admin</text>
+  <text class="elabel" data-e="e-clientapi-coord" x="596" y="428">validated request</text>
+  <text class="elabel" data-e="e-coord-ring" x="812" y="286">preference list</text>
+  <text class="elabel" data-e="e-coord-storage" x="826" y="632">local read/write</text>
+  <text class="elabel" data-e="e-rpc-peer" x="1160" y="322">/internal/replicate</text>
+  <text class="elabel repairflow" data-e="e-rpc-peer-storage" x="1198" y="430">/internal/read</text>
+  <text class="elabel repairflow" data-e="e-coord-readrepair" x="918" y="292">stale response</text>
+  <text class="elabel repairflow" data-e="e-ae-merkle" x="1126" y="412">root compare</text>
+  <text class="elabel repairflow" data-e="e-hints-rpc" x="944" y="628">replay recovered</text>
+  <text class="elabel repairflow" data-e="e-fd-rpc" x="1135" y="545">heartbeat + gossip exchange</text>
+  <text class="elabel opsflow" data-e="e-admin-prom" x="1010" y="746">/metrics scrape</text>
+  <text class="elabel opsflow" data-e="e-node-loki" x="1015" y="824">structured logs</text>
+  <text class="elabel opsflow" data-e="e-backup-pebble" x="1130" y="838">checkpoint</text>
+
+  <!-- Animated anchors -->
+  <circle class="pulse" id="p-client" cx="244" cy="217" r="5"></circle>
+  <circle class="pulse" id="p-coord" cx="800" cy="343" r="5"></circle>
+  <circle class="pulse" id="p-peer" cx="1360" cy="270" r="5"></circle>
+  <circle class="pulse" id="p-store" cx="800" cy="885" r="5"></circle>
+  <circle class="pulse" id="p-ops" cx="1360" cy="724" r="5"></circle>
+</svg>
+
+<section class="caption" id="flowcap"></section>
+<aside class="detail" id="detail">
+  <h2>GoQuorum node</h2>
+  <div class="meta">click a component · choose a flow</div>
+  <p>A node is one Go process exposing client/admin APIs, coordinating quorum reads and writes, repairing divergent replicas, and persisting sibling sets in Pebble.</p>
+</aside>
+</main>
+
+<script>
+  const nodes = {
+    "app-client": ["Application client", "client/client.go · api/proto/goquorum.proto", "Calls Get, Put, Delete, BatchGet, and BatchPut through gRPC or the HTTP/JSON gateway. Read-modify-write clients pass vector-clock context back on writes."],
+    "quorumctl": ["quorumctl", "cmd/quorumctl/main.go", "Terminal client for data operations and cluster inspection. It uses the same public API surface as applications."],
+    "benchmarks": ["Benchmarks", "benchmarks/main.go", "Runs live-cluster workloads over real gRPC connections and reports latency percentiles, QPS, and replication lag."],
+    "operators": ["Operators", "HTTP endpoints", "Use health, readiness, debug, metrics, backup, restore, and ring admin endpoints to run the cluster."],
+    "grpc-server": ["GoQuorum gRPC server", "internal/server/server.go", "Registers GoQuorum, GoQuorumAdmin, and internal proto services on the configured gRPC address. TLS and rate limiting are applied here."],
+    "http-gateway": ["HTTP gateway and mux", "internal/server/server.go", "Hosts grpc-gateway routes under /v1 plus bare health, metrics, debug, backup, restore, and internal node-to-node routes."],
+    "client-api": ["ClientAPI", "internal/server/client_api.go", "Validates key/value sizes, maps protobuf context to vector clocks, calls the coordinator, filters tombstones, and maps domain errors to gRPC statuses."],
+    "admin-api": ["AdminAPI", "internal/server/admin_api.go · backup_api.go · health.go", "Surfaces cluster health, peer state, metrics text, key placement, compaction, and backup/restore operations."],
+    "internal-api": ["InternalAPI", "internal/server/internal_api.go", "Receives peer replication, remote reads, heartbeat probes, Merkle root requests, leaving notifications, and gossip exchanges."],
+    "coordinator": ["Coordinator", "internal/cluster/coordinator.go", "The main quorum orchestrator. It chooses preference lists, advances vector clocks, fans out reads/writes, evaluates R/W success, records hints, and triggers repair."],
+    "hashring": ["HashRing", "internal/cluster/hashring.go", "Maps keys to replica preference lists using consistent hashing with 256 virtual nodes per physical member."],
+    "membership": ["MembershipManager", "internal/cluster/membership.go", "Tracks peer metadata, active/suspect/failed states, HTTP and gRPC addresses, latency, and bootstrap quorum."],
+    "failure-detector": ["FailureDetector", "internal/cluster/failure_detector.go", "Sends periodic heartbeats, records failures and recovery, updates membership, marks gossip state, and triggers post-recovery anti-entropy."],
+    "rpc-client": ["RPCClient", "internal/cluster/rpc_client.go", "Inter-node client. The concrete GRPCClient name is historical: replica writes, reads, heartbeats, Merkle roots, and leave notices use HTTP/JSON."],
+    "vclock": ["Vector clocks", "api/vclock/vclock.go · compare.go", "Causal metadata for every sibling. Happens-after and concurrency checks decide whether values replace, coexist, or need client conflict resolution."],
+    "read-repair": ["ReadRepairer", "internal/cluster/read_repair.go", "After reads, compares replica responses and asynchronously sends the merged sibling set to stale replicas."],
+    "anti-entropy": ["AntiEntropy", "internal/cluster/anti_entropy.go", "Background convergence loop. It compares Merkle roots with peers, scans divergent buckets, and pushes missing or stale keys."],
+    "merkle": ["MerkleTree", "internal/cluster/merkle_tree.go", "SHA256 bucket tree over storage contents. Incremental writes update bucket hashes, and comparisons localize divergence."],
+    "hinted-handoff": ["HintedHandoff", "internal/cluster/hinted_handoff.go", "Buffers writes for unavailable target replicas in memory, then replays them when membership reports the node active."],
+    "ttl-sweeper": ["TTLSweeper", "internal/cluster/ttl_sweeper.go", "Scans for expired records and routes deletions through the coordinator so tombstones propagate normally."],
+    "storage": ["Storage Engine", "internal/storage/engine.go · encoding.go", "Stores sibling sets, reconciles vector-clock dominance, prunes sibling explosions and old clock entries, filters TTL/tombstones, and protects encoded values with CRC32."],
+    "pebble": ["Pebble LSM", "internal/storage/pebble.go", "Local CockroachDB Pebble database under the node data directory. Writes may be sync or high-throughput async depending on config."],
+    "peer-node": ["Peer GoQuorum node", "cluster member", "Each peer runs the same stack. Replication, repair, gossip, heartbeat, and Merkle exchange flow through its internal HTTP routes."],
+    "peer-storage": ["Replica storage", "remote Pebble", "Replica state converges through quorum writes, hinted handoff, read repair, and anti-entropy."],
+    "gossip-peer": ["Gossip peer", "POST /internal/gossip/exchange", "Push-pull exchange spreads node status updates across the cluster using fanout and last-write-wins timestamps."],
+    "config": ["Configuration", "internal/config/*.go · config/*.yaml", "YAML config drives node identity, cluster members, server addresses, quorum N/R/W, storage limits, repair intervals, TLS, and connection timeouts."],
+    "tls": ["TLS / mTLS", "internal/security/tls.go", "Loads server/client TLS config for gRPC and inter-node HTTP. Mutual TLS can protect cluster traffic."],
+    "bootstrap": ["Bootstrap / shutdown", "internal/cluster/bootstrap.go · graceful_shutdown.go", "Startup waits for cluster quorum before becoming active. Shutdown drains in-flight requests and syncs data to remaining peers."],
+    "backup": ["Backup / Restore", "internal/backup/backup.go", "Creates Pebble checkpoints, archives them as tar.gz, writes SHA256 manifests, and verifies checksums before restore."],
+    "prometheus": ["Prometheus", "config/prometheus.yaml", "Scrapes /metrics from every node and stores subsystem counters, gauges, and histograms."],
+    "loki": ["Loki + Promtail", "config/loki.yaml · promtail.yaml", "Collects structured node logs from containers for operational debugging."],
+    "grafana": ["Grafana", "docker-compose.yaml", "Uses Prometheus and Loki datasources to visualize cluster behavior."],
+  };
+
+  const flows = {
+    all: {
+      name: "Everything",
+      steps: ["Full static architecture view."],
+      edges: [],
+      nodes: [],
+      pulses: []
+    },
+    dynamo: {
+      name: "Dynamo lifecycle",
+      steps: [
+        "A key is mapped by <code>HashRing</code> to a preference list of N replica nodes.",
+        "Writes tick a vector clock, store a sibling locally, and fan out to replicas until W acknowledgements succeed.",
+        "Reads fan out to the same preference list until R responses succeed, then merge sibling sets by vector-clock dominance.",
+        "Concurrent siblings can be returned to the client for conflict resolution; stale replicas are repaired asynchronously.",
+        "If a preferred replica is unavailable, hinted handoff buffers the write; anti-entropy and Merkle comparison repair cold divergence later."
+      ],
+      edges: ["e-client-grpc", "e-grpc-clientapi", "e-clientapi-coord", "e-coord-ring", "e-coord-vclock", "e-coord-storage", "e-storage-pebble", "e-coord-rpc", "e-rpc-peer", "e-rpc-peer-storage", "e-coord-readrepair", "e-readrepair-rpc", "e-coord-hints", "e-hints-rpc", "e-coord-antientropy", "e-ae-merkle", "e-ae-rpc", "e-merkle-peer"],
+      nodes: ["app-client", "grpc-server", "client-api", "coordinator", "hashring", "vclock", "storage", "pebble", "rpc-client", "peer-node", "peer-storage", "read-repair", "hinted-handoff", "anti-entropy", "merkle"],
+      labels: ["e-client-grpc", "e-clientapi-coord", "e-coord-ring", "e-coord-storage", "e-rpc-peer", "e-rpc-peer-storage", "e-coord-readrepair", "e-ae-merkle", "e-hints-rpc"],
+      pulses: ["p-client", "p-coord", "p-peer", "p-store"]
+    },
+    write: {
+      name: "Write path",
+      steps: [
+        "Client calls <code>Put</code> through gRPC or HTTP gateway.",
+        "ClientAPI validates input and passes vector-clock context to the coordinator.",
+        "Coordinator ticks the local clock, asks HashRing for N replicas, writes locally, and fans out to peers.",
+        "W successes return the new context; failed replicas receive hinted handoff entries and anti-entropy is updated."
+      ],
+      edges: ["e-client-grpc", "e-grpc-clientapi", "e-clientapi-coord", "e-coord-ring", "e-coord-vclock", "e-coord-storage", "e-storage-pebble", "e-coord-rpc", "e-rpc-peer", "e-peer-storage", "e-coord-hints"],
+      nodes: ["app-client", "grpc-server", "client-api", "coordinator", "hashring", "vclock", "storage", "pebble", "rpc-client", "peer-node", "peer-storage", "hinted-handoff", "anti-entropy"],
+      labels: ["e-client-grpc", "e-clientapi-coord", "e-coord-ring", "e-coord-storage", "e-rpc-peer"],
+      pulses: ["p-client", "p-coord", "p-peer", "p-store"]
+    },
+    read: {
+      name: "Read path",
+      steps: [
+        "Client calls <code>Get</code>; ClientAPI forwards read options to the coordinator.",
+        "Coordinator asks HashRing for the preference list and issues parallel local and remote reads.",
+        "When R responses succeed, sibling sets are merged and tombstones are filtered for the client.",
+        "ReadRepairer asynchronously pushes the merged state to stale replicas."
+      ],
+      edges: ["e-client-grpc", "e-grpc-clientapi", "e-clientapi-coord", "e-coord-ring", "e-coord-storage", "e-coord-rpc", "e-rpc-peer-storage", "e-coord-readrepair", "e-readrepair-rpc", "e-rpc-peer"],
+      nodes: ["app-client", "grpc-server", "client-api", "coordinator", "hashring", "storage", "rpc-client", "peer-node", "peer-storage", "read-repair", "vclock"],
+      labels: ["e-client-grpc", "e-clientapi-coord", "e-rpc-peer-storage", "e-coord-readrepair"],
+      pulses: ["p-client", "p-coord", "p-peer", "p-store"]
+    },
+    gossip: {
+      name: "Gossip and failure detection",
+      steps: [
+        "FailureDetector sends heartbeats through RPCClient and records success/failure in membership.",
+        "State transitions mark peers suspect, failed, or active.",
+        "Gossip exchanges cluster state over <code>/internal/gossip/exchange</code> and merges newer entries.",
+        "Recovery callbacks trigger anti-entropy with the recovered peer."
+      ],
+      edges: ["e-fd-rpc", "e-gossip-peer", "e-fd-membership", "e-internal-gossip", "e-coord-antientropy", "e-ae-rpc"],
+      nodes: ["failure-detector", "membership", "rpc-client", "gossip-peer", "internal-api", "anti-entropy", "peer-node"],
+      labels: ["e-fd-rpc"],
+      pulses: ["p-peer"]
+    },
+    repair: {
+      name: "Repair and convergence",
+      steps: [
+        "Writes update the local Merkle tree incrementally.",
+        "AntiEntropy compares roots with peers, scans divergent buckets, and pushes keys.",
+        "ReadRepairer fixes stale replicas discovered on reads.",
+        "HintedHandoff replays failed writes after recovery; TTL sweeper deletes expired values via normal replication."
+      ],
+      edges: ["e-coord-antientropy", "e-ae-merkle", "e-ae-storage", "e-merkle-storage", "e-ae-rpc", "e-merkle-peer", "e-coord-readrepair", "e-readrepair-rpc", "e-coord-hints", "e-hints-rpc", "e-ttl-storage", "e-storage-pebble"],
+      nodes: ["coordinator", "anti-entropy", "merkle", "read-repair", "hinted-handoff", "ttl-sweeper", "storage", "pebble", "rpc-client", "peer-node", "peer-storage"],
+      labels: ["e-ae-merkle", "e-hints-rpc", "e-coord-readrepair"],
+      pulses: ["p-coord", "p-peer", "p-store"]
+    },
+    ops: {
+      name: "Operations surface",
+      steps: [
+        "Operators use health, debug, admin, backup, restore, and metrics endpoints on the HTTP server.",
+        "AdminAPI reads coordinator, membership, ring, and storage state.",
+        "Prometheus scrapes text metrics, Promtail ships logs to Loki, and Grafana reads both datasources.",
+        "Backup takes a Pebble checkpoint and emits an archive plus SHA256 manifest."
+      ],
+      edges: ["e-operator-http", "e-http-admin", "e-admin-coord", "e-admin-membership", "e-admin-prom", "e-node-loki", "e-prom-grafana", "e-loki-grafana", "e-backup-pebble"],
+      nodes: ["operators", "http-gateway", "admin-api", "coordinator", "membership", "backup", "pebble", "prometheus", "loki", "grafana"],
+      labels: ["e-operator-http", "e-admin-prom", "e-node-loki", "e-backup-pebble"],
+      pulses: ["p-ops"]
+    },
+    startup: {
+      name: "Startup lifecycle",
+      steps: [
+        "<code>cmd/quorum/main.go</code> loads YAML config and opens Pebble storage.",
+        "Membership, HashRing, RPCClient, Coordinator, FailureDetector, Gossip, HintedHandoff, and TTLSweeper are constructed.",
+        "Server starts gRPC and HTTP listeners, then Coordinator starts anti-entropy and hinted handoff.",
+        "Bootstrap waits for cluster quorum before the node serves as active."
+      ],
+      edges: ["e-config-node", "e-tls-servers", "e-bootstrap-membership", "e-bootstrap-fd", "e-coord-ring", "e-coord-membership", "e-coord-rpc", "e-coord-storage", "e-coord-antientropy"],
+      nodes: ["config", "tls", "bootstrap", "grpc-server", "http-gateway", "membership", "hashring", "coordinator", "rpc-client", "failure-detector", "anti-entropy", "hinted-handoff", "ttl-sweeper", "storage"],
+      labels: [],
+      pulses: ["p-coord", "p-store"]
+    }
+  };
+
+  const stage = document.getElementById("stage");
+  const detail = document.getElementById("detail");
+  const flowcap = document.getElementById("flowcap");
+
+  function clearFlow() {
+    stage.classList.remove("flowing");
+    document.querySelectorAll(".lit").forEach(el => el.classList.remove("lit", "repairflow", "apiflow", "opsflow"));
+    document.querySelectorAll(".elabel").forEach(label => {
+      label.style.display = "none";
+    });
+  }
+
+  function edgeClass(id) {
+    const edge = document.getElementById(id);
+    if (!edge) return "";
+    if (edge.classList.contains("repairflow")) return "repairflow";
+    if (edge.classList.contains("apiflow")) return "apiflow";
+    if (edge.classList.contains("opsflow")) return "opsflow";
+    return "";
+  }
+
+  function setFlow(name) {
+    clearFlow();
+    document.querySelectorAll(".chip").forEach(btn => btn.classList.toggle("on", btn.dataset.flow === name));
+    const flow = flows[name] || flows.all;
+
+    if (name === "all") {
+      flowcap.classList.remove("show");
+      flowcap.innerHTML = "";
+      return;
+    }
+
+    stage.classList.add("flowing");
+    for (const nodeKey of flow.nodes || []) {
+      document.querySelector(`[data-k="${nodeKey}"]`)?.classList.add("lit");
+    }
+    for (const edgeId of flow.edges || []) {
+      const edge = document.getElementById(edgeId);
+      if (!edge) continue;
+      edge.classList.add("lit");
+      const cls = edgeClass(edgeId);
+      if (cls) edge.classList.add(cls);
+    }
+    for (const labelId of flow.labels || []) {
+      document.querySelectorAll(`[data-e="${labelId}"]`).forEach(label => {
+        label.style.display = "block";
+        label.classList.add("lit");
+        const cls = edgeClass(labelId);
+        if (cls) label.classList.add(cls);
+      });
+    }
+    for (const pulseId of flow.pulses || []) {
+      document.getElementById(pulseId)?.classList.add("lit");
+    }
+
+    flowcap.classList.add("show");
+    flowcap.innerHTML = `<div class="name">${flow.name}</div><ol>${flow.steps.map(s => `<li>${s}</li>`).join("")}</ol>`;
+  }
+
+  document.getElementById("chips").addEventListener("click", event => {
+    const btn = event.target.closest("[data-flow]");
+    if (!btn) return;
+    setFlow(btn.dataset.flow);
+  });
+
+  document.querySelectorAll(".node").forEach(node => {
+    node.addEventListener("click", () => {
+      document.querySelectorAll(".node.sel").forEach(n => n.classList.remove("sel"));
+      node.classList.add("sel");
+      const item = nodes[node.dataset.k];
+      if (!item) return;
+      detail.classList.add("show");
+      detail.innerHTML = `<h2>${item[0]}</h2><div class="meta">${item[1]}</div><p>${item[2]}</p>`;
+    });
+  });
+
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    const dark = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("goquorum-arch-theme", dark ? "dark" : "light");
+  });
+</script>
+</body>
+</html>
