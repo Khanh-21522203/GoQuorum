@@ -20,12 +20,12 @@ type ProbeHandler interface {
 //	                         ▼ (On Response / Error)
 //	                   handler.OnHeartbeatResult(peerID, err)
 type FailureDetector struct {
-	transport adapter.Transport
+	transport adapter.ClientTransport
 	handler   ProbeHandler
 }
 
 // NewFailureDetector constructs a FailureDetector attached to transport and handler.
-func NewFailureDetector(tr adapter.Transport, handler ProbeHandler) *FailureDetector {
+func NewFailureDetector(tr adapter.ClientTransport, handler ProbeHandler) *FailureDetector {
 	return &FailureDetector{
 		transport: tr,
 		handler:   handler,
@@ -40,20 +40,15 @@ func (fd *FailureDetector) SetHandler(h ProbeHandler) {
 // Probe pings all given peers over Transport.
 func (fd *FailureDetector) Probe(peerIDs []node.NodeID) {
 	for _, id := range peerIDs {
-		targetID := id
-		fd.transport.Heartbeat(targetID, func(err error) {
-			if fd.handler != nil {
-				fd.handler.OnHeartbeatResult(targetID, err)
-			}
-		})
+		if err := fd.transport.Heartbeat(id, 0); err != nil && fd.handler != nil {
+			fd.handler.OnHeartbeatResult(id, err)
+		}
 	}
 }
 
 // ProbeOne pings a single peer over Transport.
 func (fd *FailureDetector) ProbeOne(targetID node.NodeID) {
-	fd.transport.Heartbeat(targetID, func(err error) {
-		if fd.handler != nil {
-			fd.handler.OnHeartbeatResult(targetID, err)
-		}
-	})
+	if err := fd.transport.Heartbeat(targetID, 0); err != nil && fd.handler != nil {
+		fd.handler.OnHeartbeatResult(targetID, err)
+	}
 }

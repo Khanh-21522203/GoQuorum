@@ -220,3 +220,55 @@ func TestWake_InterruptsBlockedPoll(t *testing.T) {
 		t.Fatal("event handler never invoked; Wake did not interrupt Poll")
 	}
 }
+
+func TestReactor_RegisterFD_DirectDispatch(t *testing.T) {
+	src := newFakeSource()
+	r := New(src)
+
+	fd10Events := make(chan Event, 1)
+	fallbackEvents := make(chan Event, 1)
+
+	r.RegisterFD(10, func(ev Event) { fd10Events <- ev })
+	r.SetEventHandler(func(ev Event) { fallbackEvents <- ev })
+
+	runInBackground(t, r)
+
+	// UserData with FD=10 (10 << 32 | 1)
+	ud10 := (uint64(10) << 32) | 1
+	src.push(Event{UserData: ud10, Result: 100})
+
+	select {
+	case ev := <-fd10Events:
+		if ev.Result != 100 {
+			t.Fatalf("expected Result=100, got %d", ev.Result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FD=10 event handler never invoked")
+	}
+
+	// UserData with unregistered FD=20 should fall back to default handler
+	ud20 := (uint64(20) << 32) | 2
+	src.push(Event{UserData: ud20, Result: 200})
+
+	select {
+	case ev := <-fallbackEvents:
+		if ev.Result != 200 {
+			t.Fatalf("expected Result=200, got %d", ev.Result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fallback event handler never invoked")
+	}
+
+	// Unregister FD=10 and verify it falls back
+	r.UnregisterFD(10)
+	src.push(Event{UserData: ud10, Result: 300})
+
+	select {
+	case ev := <-fallbackEvents:
+		if ev.Result != 300 {
+			t.Fatalf("expected Result=300, got %d", ev.Result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fallback event handler after unregister never invoked")
+	}
+}

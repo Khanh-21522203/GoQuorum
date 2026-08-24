@@ -48,8 +48,8 @@ const (
 	// MaxCoalesceChunkSize is the maximum total byte span of a single coalesced Pread.
 	MaxCoalesceChunkSize = 2 * 1024 * 1024 // 2 MB
 
-	// scanUserDataFlag is set on bit 62 of io_uring UserData to distinguish scan chunk reads from standard Get reads.
-	scanUserDataFlag = uint64(1) << 62
+	// scanUserDataFlag is set on bit 31 of sequence to distinguish scan chunk reads from standard Get reads.
+	scanUserDataFlag = uint64(1) << 31
 
 	// defaultInFlightSlots is the default capacity of the contiguous in-flight slot table.
 	defaultInFlightSlots = 4096
@@ -57,10 +57,11 @@ const (
 
 // Options configures Store initialization and segment ring topology.
 type Options struct {
-	DataDir     string // Directory containing ring segment files (e.g. wal_0.log, wal_1.log...)
-	Path        string // Single file path (for backwards compatibility if DataDir is empty)
-	NumSegments int    // Number of segment files in the circular ring (min: 2, default: 4)
-	SegmentSize uint64 // Maximum byte capacity per segment file (default: 64 MB)
+	DataDir     string           // Directory containing ring segment files (e.g. wal_0.log, wal_1.log...)
+	Path        string           // Single file path (for backwards compatibility if DataDir is empty)
+	NumSegments int              // Number of segment files in the circular ring (min: 2, default: 4)
+	SegmentSize uint64           // Maximum byte capacity per segment file (default: 64 MB)
+	Reactor     *reactor.Reactor // Optional reactor to auto-register segment FDs
 }
 
 // Stats reports point-in-time storage statistics across the ring.
@@ -162,6 +163,7 @@ type Store struct {
 	fds   []int      // Raw file descriptors for zero-overhead io_uring submission
 
 	rt  *ioruntime.Runtime
+	r   *reactor.Reactor
 	idx *index
 
 	currentEpoch uint64 // Monotonic epoch counter stamped on segment headers
@@ -258,12 +260,13 @@ func Open(rt *ioruntime.Runtime, opts Options) (*Store, error) {
 		tailOffset = SegmentHeaderSize
 	}
 
-	return &Store{
+	s := &Store{
 		opts:          opts,
 		dataDir:       dataDir,
 		files:         files,
 		fds:           fds,
 		rt:            rt,
+		r:             opts.Reactor,
 		idx:           idx,
 		currentEpoch:  maxEpoch,
 		activeSeg:     activeSeg,
@@ -275,7 +278,32 @@ func Open(rt *ioruntime.Runtime, opts Options) (*Store, error) {
 		itemPool:      pool.NewDefaultArrayPool[scanItem](),
 		chunkPool:     pool.NewDefaultArrayPool[scanChunk](),
 		scanPool:      pool.NewDefaultArrayPool[ScanEntry](),
-	}, nil
+	}
+	if s.r != nil {
+		for _, fd := range s.fds {
+			s.r.RegisterFD(fd, func(ev reactor.Event) {
+				s.HandleCompletion(ev)
+			})
+		}
+	}
+	return s, nil
+}
+
+// SetReactor sets or updates the reactor and registers all segment file descriptors.
+func (s *Store) SetReactor(r *reactor.Reactor) {
+	if s.r != nil {
+		for _, fd := range s.fds {
+			s.r.UnregisterFD(fd)
+		}
+	}
+	s.r = r
+	if s.r != nil {
+		for _, fd := range s.fds {
+			s.r.RegisterFD(fd, func(ev reactor.Event) {
+				s.HandleCompletion(ev)
+			})
+		}
+	}
 }
 
 // SetHandler sets the StoreHandler for zero-allocation static event dispatch.
@@ -305,7 +333,7 @@ func (s *Store) Get(reqID uint64, key []byte) error {
 	slot.Value.buf = buf[:entry.Length]
 
 	fd := s.fds[entry.SegID]
-	if err := s.rt.SubmitPread(fd, slot.Value.buf, uint64(entry.Offset), reqID); err != nil {
+	if err := s.rt.SubmitPread(fd, slot.Value.buf, uint64(entry.Offset), makeUserData(fd, reqID)); err != nil {
 		s.slots.Release(reqID)
 		s.bytePool.Return(slot.Value.buf)
 		if s.handler != nil {
@@ -364,7 +392,7 @@ func (s *Store) Put(reqID uint64, key []byte, val []byte) error {
 	slot.Value.buf = encoded
 
 	fd := s.fds[segID]
-	if err := s.rt.SubmitPwrite(fd, slot.Value.buf, uint64(offset), reqID); err != nil {
+	if err := s.rt.SubmitPwrite(fd, slot.Value.buf, uint64(offset), makeUserData(fd, reqID)); err != nil {
 		s.slots.Release(reqID)
 		s.bytePool.Return(slot.Value.buf)
 		if s.handler != nil {
@@ -458,11 +486,11 @@ func (s *Store) Scan(scanID uint64, start, end []byte) error {
 		buf := s.bytePool.Rent(int(chunk.length))
 		chunk.buf = buf[:chunk.length]
 
-		// Bit-pack: Flag (bit 62) | ScanID (bits 16..61) | ChunkIndex (bits 0..15)
-		userData := scanUserDataFlag | ((scanID & 0x3FFFFFFFFFFF) << 16) | uint64(chunkIdx&0xFFFF)
+		// Bit-pack: Flag (bit 31) | ScanID (bits 16..30) | ChunkIndex (bits 0..15)
+		userData := scanUserDataFlag | ((scanID & 0x7FFF) << 16) | uint64(chunkIdx&0xFFFF)
 		fd := s.fds[chunk.segID]
 
-		if err := s.rt.SubmitPread(fd, chunk.buf, uint64(chunk.offset), userData); err != nil {
+		if err := s.rt.SubmitPread(fd, chunk.buf, uint64(chunk.offset), makeUserData(fd, userData)); err != nil {
 			scanState.pendingCount--
 			if scanState.failedErr == nil {
 				scanState.failedErr = fmt.Errorf("%w: submitting scan chunk %d: %v", quorumerr.ErrStorageIO, chunkIdx, err)
@@ -659,15 +687,25 @@ func (s *Store) Compact(compactID uint64, filter CompactFilter) error {
 // 100% Zero-Alloc: Direct SlotTable lookup, zero-copy record views, buffer return to ArrayPool.
 func (s *Store) HandleCompletion(ev reactor.Event) bool {
 	reqID := ev.UserData
+	if fd, seq := splitUserData(ev.UserData); fd != 0 {
+		reqID = seq
+	}
 
 	if ev.Err != nil && s.handler != nil {
 		s.handler.OnStorageError(ev.Err)
 	}
 
-	// 1. Check if it's a Scan chunk completion (distinguished by scanUserDataFlag on bit 62)
-	if reqID&scanUserDataFlag != 0 {
-		scanID := (reqID &^ scanUserDataFlag) >> 16
-		chunkIdx := int(reqID & 0xFFFF)
+	// 1. Check if it's a Scan chunk completion (distinguished by scanUserDataFlag on bit 31 or legacy bit 62)
+	if reqID&scanUserDataFlag != 0 || reqID&(uint64(1)<<62) != 0 {
+		var scanID uint64
+		var chunkIdx int
+		if reqID&scanUserDataFlag != 0 {
+			scanID = (reqID &^ scanUserDataFlag) >> 16
+			chunkIdx = int(reqID & 0xFFFF)
+		} else {
+			scanID = (reqID &^ (uint64(1) << 62)) >> 16
+			chunkIdx = int(reqID & 0xFFFF)
+		}
 
 		scanState, exists := s.inFlightScans[scanID]
 		if exists && chunkIdx < len(scanState.chunks) {
@@ -799,6 +837,11 @@ func (s *Store) Stats() Stats {
 
 // Close releases all underlying segment file descriptors.
 func (s *Store) Close() error {
+	if s.r != nil {
+		for _, fd := range s.fds {
+			s.r.UnregisterFD(fd)
+		}
+	}
 	var firstErr error
 	for i, f := range s.files {
 		if f == nil {
@@ -811,4 +854,12 @@ func (s *Store) Close() error {
 		}
 	}
 	return firstErr
+}
+
+func makeUserData(fd int, seq uint64) uint64 {
+	return uint64(uint32(fd))<<32 | (seq & 0xffffffff)
+}
+
+func splitUserData(ud uint64) (fd int, seq uint64) {
+	return int(uint32(ud >> 32)), ud & 0xffffffff
 }

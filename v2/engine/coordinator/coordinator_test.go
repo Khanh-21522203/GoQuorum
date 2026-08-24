@@ -8,6 +8,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
+	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
@@ -151,7 +152,8 @@ func (s *fakeStorage) Close() error                                             
 // --- fake adapter.Transport (backs every non-local node) ---
 
 type fakeTransport struct {
-	rt *reactor.Reactor
+	rt      *reactor.Reactor
+	handler adapter.ClientAdapterHandler
 
 	mu       sync.Mutex
 	putFail  map[node.NodeID]bool
@@ -172,6 +174,10 @@ func newFakeTransport(rt *reactor.Reactor) *fakeTransport {
 		getErr:   make(map[node.NodeID]error),
 		getDelay: make(map[node.NodeID]time.Duration),
 	}
+}
+
+func (f *fakeTransport) setHandler(h adapter.ClientAdapterHandler) {
+	f.handler = h
 }
 
 func (f *fakeTransport) setPutBehavior(id node.NodeID, fail bool, delay time.Duration) {
@@ -195,49 +201,79 @@ func (f *fakeTransport) putCount(id node.NodeID) int {
 	return len(f.putCalls[id])
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
+func (f *fakeTransport) RemotePut(id node.NodeID, corrID uint64, key []byte, siblings *adapter.SiblingSet) error {
 	f.mu.Lock()
 	f.putCalls[id] = append(f.putCalls[id], siblings)
 	fail, delay := f.putFail[id], f.putDelay[id]
 	f.mu.Unlock()
 
 	fire := func() {
-		if fail {
-			done(errors.New("fake transport: put failed"))
-			return
+		if f.handler != nil {
+			if fail {
+				f.handler.OnRemotePutResponse(id, corrID, wire.StatusStorageIO)
+			} else {
+				f.handler.OnRemotePutResponse(id, corrID, wire.StatusOK)
+			}
 		}
-		done(nil)
 	}
 	if delay > 0 {
 		f.rt.ScheduleOnce(delay, fire)
-		return
+		return nil
 	}
 	fire()
+	return nil
 }
 
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
+func (f *fakeTransport) RemoteGet(id node.NodeID, corrID uint64, key []byte) error {
 	f.mu.Lock()
 	resp, err, delay := f.getResp[id], f.getErr[id], f.getDelay[id]
 	f.mu.Unlock()
 
-	fire := func() { done(resp, err) }
+	fire := func() {
+		if f.handler != nil {
+			status := wire.StatusOK
+			if err != nil {
+				status = wire.StatusKeyNotFound
+			}
+			f.handler.OnRemoteGetResponse(id, corrID, resp, status)
+		}
+	}
 	if delay > 0 {
 		f.rt.ScheduleOnce(delay, fire)
-		return
+		return nil
 	}
 	fire()
+	return nil
 }
 
-func (f *fakeTransport) Heartbeat(id node.NodeID, done func(error))             { done(nil) }
-func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) { done(nil, nil) }
-func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error))         { done(nil) }
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
-	done(nil, nil)
+func (f *fakeTransport) Heartbeat(id node.NodeID, corrID uint64) error {
+	if f.handler != nil {
+		f.handler.OnHeartbeatResponse(id, corrID, wire.StatusOK)
+	}
+	return nil
+}
+func (f *fakeTransport) GetMerkleRoot(id node.NodeID, corrID uint64) error {
+	if f.handler != nil {
+		f.handler.OnGetMerkleRootResponse(id, corrID, nil, wire.StatusOK)
+	}
+	return nil
+}
+func (f *fakeTransport) NotifyLeaving(id node.NodeID, corrID uint64) error {
+	if f.handler != nil {
+		f.handler.OnNotifyLeavingResponse(id, corrID, wire.StatusOK)
+	}
+	return nil
+}
+func (f *fakeTransport) GossipExchange(id node.NodeID, corrID uint64, entries []adapter.GossipEntry) error {
+	if f.handler != nil {
+		f.handler.OnGossipExchangeResponse(id, corrID, nil)
+	}
+	return nil
 }
 func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
 func (f *fakeTransport) Close() error                           { return nil }
 
-var _ adapter.Transport = (*fakeTransport)(nil)
+var _ adapter.ClientTransport = (*fakeTransport)(nil)
 
 // --- test setup ---
 
@@ -270,6 +306,7 @@ func newTestCoordinator(t *testing.T) (*Coordinator, *reactor.Reactor, *fakeStor
 	st := newFakeStorage(rt, localID)
 	tr := newFakeTransport(rt)
 	c := NewCoordinator(localID, ring, st, tr, nil, rt, config.DefaultQuorumConfig())
+	tr.setHandler(c)
 	return c, rt, st, tr
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/vclock"
+	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/antientropy"
 	"goquorum.io/v2/engine/config"
@@ -29,7 +30,7 @@ type Coordinator struct {
 	nodeID     node.NodeID
 	ring       *hashring.HashRing
 	storage    adapter.Storage
-	transport  adapter.Transport
+	transport  adapter.ClientTransport
 	membership *membership.MembershipManager
 	reactor    *reactor.Reactor
 
@@ -43,10 +44,10 @@ type Coordinator struct {
 	handoffInterval       time.Duration
 
 	readRepairer    *readrepair.ReadRepairer
-	antiEntropy     *antientropy.AntiEntropy
 	failureDetector *failuredetector.FailureDetector
 	gossip          *gossip.Gossip
 	handoff         *handoff.HintedHandoff
+	antiEntropy     *antientropy.AntiEntropy
 
 	peerFSM *PeerFSM
 	started bool
@@ -62,30 +63,38 @@ type Coordinator struct {
 	readRequests  map[uint64]*readRequest
 }
 
-// Option configures optional Coordinator tuning.
+// Option modifies Coordinator configuration parameters.
 type Option func(*Coordinator)
 
-// WithReadRepairConfig configures read-repair behavior.
-func WithReadRepairConfig(cfg config.ReadRepairConfig) Option {
-	return func(c *Coordinator) { c.readRepairConfig = cfg }
-}
-
-// WithAntiEntropyConfig configures anti-entropy behavior.
-func WithAntiEntropyConfig(cfg config.AntiEntropyConfig) Option {
-	return func(c *Coordinator) { c.antiEntropyConfig = cfg }
-}
-
-// WithFailureDetectorConfig configures failure detector behavior.
+// WithFailureDetectorConfig sets failure detector parameters.
 func WithFailureDetectorConfig(cfg config.FailureDetectorConfig) Option {
 	return func(c *Coordinator) { c.failureDetectorConfig = cfg }
 }
 
-// WithGossipConfig configures gossip behavior.
-func WithGossipConfig(cfg gossip.GossipConfig, interval time.Duration) Option {
-	return func(c *Coordinator) { c.gossipConfig = cfg; c.gossipInterval = interval }
+// WithAntiEntropyConfig sets anti-entropy parameters.
+func WithAntiEntropyConfig(cfg config.AntiEntropyConfig) Option {
+	return func(c *Coordinator) { c.antiEntropyConfig = cfg }
 }
 
-// WithTimeoutConfig configures timeout behavior.
+// WithReadRepairConfig sets read-repair parameters.
+func WithReadRepairConfig(cfg config.ReadRepairConfig) Option {
+	return func(c *Coordinator) { c.readRepairConfig = cfg }
+}
+
+// WithGossipConfig sets gossip parameters.
+func WithGossipConfig(cfg gossip.GossipConfig, interval time.Duration) Option {
+	return func(c *Coordinator) {
+		c.gossipConfig = cfg
+		c.gossipInterval = interval
+	}
+}
+
+// WithHandoffInterval sets hinted handoff replay interval.
+func WithHandoffInterval(interval time.Duration) Option {
+	return func(c *Coordinator) { c.handoffInterval = interval }
+}
+
+// WithTimeoutConfig sets request timeout parameters.
 func WithTimeoutConfig(cfg config.TimeoutConfig) Option {
 	return func(c *Coordinator) { c.timeoutConfig = cfg }
 }
@@ -95,7 +104,7 @@ func NewCoordinator(
 	id node.NodeID,
 	ring *hashring.HashRing,
 	store adapter.Storage,
-	tr adapter.Transport,
+	tr adapter.ClientTransport,
 	mm *membership.MembershipManager,
 	rt *reactor.Reactor,
 	cfg config.QuorumConfig,
@@ -135,18 +144,49 @@ func NewCoordinator(
 	if mm != nil {
 		for _, p := range mm.GetAllPeers() {
 			c.peerFSM.AddPeer(p, node.NodeStateActive)
+			if p != id {
+				addr := mm.GetHTTPAddress(p)
+				if addr != "" {
+					_ = tr.Dial(p, addr)
+				}
+			}
 		}
+	}
+
+	if h, ok := tr.(interface {
+		SetHandler(adapter.ClientAdapterHandler)
+	}); ok {
+		h.SetHandler(c)
 	}
 
 	return c
 }
 
-// Start starts background anti-entropy sync and arms master reactor timers.
+// HandleCompletion delegates completion demuxing to the underlying transport if supported.
+func (c *Coordinator) HandleCompletion(ev reactor.Event) bool {
+	if h, ok := c.transport.(interface{ HandleCompletion(reactor.Event) bool }); ok {
+		return h.HandleCompletion(ev)
+	}
+	return false
+}
+
+// Start starts background anti-entropy sync, dials known peers, and arms master reactor timers.
 func (c *Coordinator) Start() error {
 	if c.started {
 		return nil
 	}
 	c.started = true
+
+	if c.membership != nil {
+		for _, p := range c.membership.GetPeers() {
+			if p.ID != c.nodeID {
+				addr := c.membership.GetHTTPAddress(p.ID)
+				if addr != "" {
+					_ = c.transport.Dial(p.ID, addr)
+				}
+			}
+		}
+	}
 
 	if err := c.antiEntropy.Build(); err != nil {
 		return err
@@ -155,13 +195,16 @@ func (c *Coordinator) Start() error {
 	return nil
 }
 
-// Stop stops background timers and subsystems.
+// Stop stops background timers and subsystems, and disposes the outbound client transport.
 func (c *Coordinator) Stop() {
 	if !c.started || c.stopped {
 		return
 	}
 	c.stopped = true
 	c.disarmTimers()
+	if c.transport != nil {
+		_ = c.transport.Close()
+	}
 }
 
 // IsRunning reports whether the coordinator has been started and not yet stopped.
@@ -224,7 +267,7 @@ func (c *Coordinator) armTimers() {
 	}
 	if c.gossip != nil && c.gossipInterval > 0 {
 		c.gossipTimer = c.reactor.ScheduleEvery(c.gossipInterval, func() {
-			c.gossip.Round(c.getPeerIDs(), c.getLocalGossipEntries())
+			c.gossip.Round(c.getPeerIDs(), c.GetLocalGossipEntries())
 		})
 	}
 	if c.handoff != nil && c.handoffInterval > 0 {
@@ -260,7 +303,8 @@ func (c *Coordinator) getActivePeerIDs() []node.NodeID {
 	return nil
 }
 
-func (c *Coordinator) getLocalGossipEntries() []adapter.GossipEntry {
+// GetLocalGossipEntries returns this node's view of gossip entries.
+func (c *Coordinator) GetLocalGossipEntries() []adapter.GossipEntry {
 	if c.membership == nil {
 		return nil
 	}
@@ -364,18 +408,13 @@ func (c *Coordinator) doPut(key string, value []byte, causal vclock.VectorClock,
 
 	keyBytes := []byte(key)
 	for _, nodeID := range prefList {
-		reqID := req.id
-		targetNodeID := nodeID
-		cb := func(err error) {
-			if err != nil && targetNodeID != c.nodeID && c.handoff != nil {
-				_ = c.handoff.StoreHint(targetNodeID, keyBytes, siblingSet)
-			}
-			c.onWriteReplicaResult(reqID, err, "put")
-		}
 		if nodeID == c.nodeID {
-			c.storage.Put(keyBytes, siblingSet, cb)
+			reqID := req.id
+			c.storage.Put(keyBytes, siblingSet, func(err error) {
+				c.onWriteReplicaResult(reqID, err, "put")
+			})
 		} else {
-			c.transport.RemotePut(nodeID, keyBytes, siblingSet, cb)
+			_ = c.transport.RemotePut(nodeID, req.id, keyBytes, siblingSet)
 		}
 	}
 }
@@ -422,12 +461,13 @@ func (c *Coordinator) doGet(key string, done func([]adapter.Sibling, error)) {
 	})
 
 	for _, nodeID := range prefList {
-		reqID, nid := req.id, nodeID
-		cb := func(ss *adapter.SiblingSet, err error) { c.onReadReplicaResult(reqID, nid, ss, err) }
 		if nodeID == c.nodeID {
-			c.storage.Get(keyBytes, cb)
+			reqID, nid := req.id, nodeID
+			c.storage.Get(keyBytes, func(ss *adapter.SiblingSet, err error) {
+				c.onReadReplicaResult(reqID, nid, ss, err)
+			})
 		} else {
-			c.transport.RemoteGet(nodeID, keyBytes, cb)
+			_ = c.transport.RemoteGet(nodeID, req.id, keyBytes)
 		}
 	}
 }
@@ -485,18 +525,13 @@ func (c *Coordinator) doDelete(key string, causal vclock.VectorClock, done func(
 
 	keyBytes := []byte(key)
 	for _, nodeID := range prefList {
-		reqID := req.id
-		targetNodeID := nodeID
-		cb := func(err error) {
-			if err != nil && targetNodeID != c.nodeID && c.handoff != nil {
-				_ = c.handoff.StoreHint(targetNodeID, keyBytes, siblingSet)
-			}
-			c.onWriteReplicaResult(reqID, err, "delete")
-		}
 		if nodeID == c.nodeID {
-			c.storage.Put(keyBytes, siblingSet, cb)
+			reqID := req.id
+			c.storage.Put(keyBytes, siblingSet, func(err error) {
+				c.onWriteReplicaResult(reqID, err, "delete")
+			})
 		} else {
-			c.transport.RemotePut(nodeID, keyBytes, siblingSet, cb)
+			_ = c.transport.RemotePut(nodeID, req.id, keyBytes, siblingSet)
 		}
 	}
 }
@@ -504,4 +539,68 @@ func (c *Coordinator) doDelete(key string, causal vclock.VectorClock, done func(
 // GetMerkleRoot returns the coordinator's current anti-entropy Merkle root.
 func (c *Coordinator) GetMerkleRoot() []byte {
 	return c.antiEntropy.GetMerkleRoot()
+}
+
+var _ adapter.ClientAdapterHandler = (*Coordinator)(nil)
+
+// OnRemotePutResponse handles a write replication response from peerID.
+func (c *Coordinator) OnRemotePutResponse(peerID node.NodeID, corrID uint64, status wire.StatusCode) {
+	c.onWriteReplicaResult(corrID, wire.StatusCodeToError(status), "put")
+}
+
+// OnRemoteGetResponse handles a read replication response from peerID.
+func (c *Coordinator) OnRemoteGetResponse(peerID node.NodeID, corrID uint64, siblings *adapter.SiblingSet, status wire.StatusCode) {
+	c.onReadReplicaResult(corrID, peerID, siblings, wire.StatusCodeToError(status))
+}
+
+// OnHeartbeatResponse handles a heartbeat ping response from peerID.
+func (c *Coordinator) OnHeartbeatResponse(peerID node.NodeID, corrID uint64, status wire.StatusCode) {
+	c.OnHeartbeatResult(peerID, wire.StatusCodeToError(status))
+}
+
+// OnGetMerkleRootResponse handles a Merkle root response from peerID.
+func (c *Coordinator) OnGetMerkleRootResponse(peerID node.NodeID, corrID uint64, root []byte, status wire.StatusCode) {
+	if c.antiEntropy != nil {
+		c.antiEntropy.OnMerkleRootResult(peerID, root, wire.StatusCodeToError(status))
+	}
+}
+
+// OnNotifyLeavingResponse handles a graceful leaving response from peerID.
+func (c *Coordinator) OnNotifyLeavingResponse(peerID node.NodeID, corrID uint64, status wire.StatusCode) {
+}
+
+// OnGossipExchangeResponse handles a gossip state digest response from peerID.
+func (c *Coordinator) OnGossipExchangeResponse(peerID node.NodeID, corrID uint64, entries []adapter.GossipEntry) {
+	c.OnGossipReceived(peerID, entries)
+}
+
+// OnPeerConnected is invoked when an outbound connection to peerID succeeds.
+func (c *Coordinator) OnPeerConnected(peerID node.NodeID, addr string) {
+	c.OnHeartbeatResult(peerID, nil)
+}
+
+// OnPeerDisconnected is invoked when an outbound connection to peerID is dropped.
+func (c *Coordinator) OnPeerDisconnected(peerID node.NodeID, err error) {
+	c.OnHeartbeatResult(peerID, err)
+}
+
+// OnPeerConnectError is invoked when an outbound connection attempt to peerID fails.
+func (c *Coordinator) OnPeerConnectError(peerID node.NodeID, err error) {
+	c.OnHeartbeatResult(peerID, err)
+}
+
+// OnRPCError is invoked when an outbound RPC times out or suffers a transport error.
+func (c *Coordinator) OnRPCError(peerID node.NodeID, corrID uint64, rpcType uint16, err error) {
+	switch rpcType {
+	case uint16(wire.MsgRemotePutRequest):
+		c.onWriteReplicaResult(corrID, err, "put")
+	case uint16(wire.MsgRemoteGetRequest):
+		c.onReadReplicaResult(corrID, peerID, nil, err)
+	case uint16(wire.MsgHeartbeatRequest):
+		c.OnHeartbeatResult(peerID, err)
+	case uint16(wire.MsgGetMerkleRootRequest):
+		if c.antiEntropy != nil {
+			c.antiEntropy.OnMerkleRootResult(peerID, nil, err)
+		}
+	}
 }

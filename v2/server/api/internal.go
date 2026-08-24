@@ -130,49 +130,81 @@ type NotifyLeavingResp struct {
 	Acknowledged bool
 }
 
+// Verify InternalAPI implements adapter.ServerAdapterHandler.
+var _ adapter.ServerAdapterHandler = (*InternalAPI)(nil)
+
+// OnRemotePut writes the replicated sibling set into local storage.
+func (i *InternalAPI) OnRemotePut(connFD int, corrID uint64, key []byte, ss *adapter.SiblingSet, reply func(error)) {
+	i.storage.Put(key, ss, reply)
+}
+
+// OnRemoteGet reads the local sibling set for key from storage.
+func (i *InternalAPI) OnRemoteGet(connFD int, corrID uint64, key []byte, reply func(*adapter.SiblingSet, error)) {
+	i.storage.Get(key, reply)
+}
+
+// OnHeartbeat responds to a liveness probe.
+func (i *InternalAPI) OnHeartbeat(connFD int, corrID uint64, reply func(error)) {
+	reply(nil)
+}
+
+// OnGetMerkleRoot returns the coordinator's current anti-entropy Merkle root.
+func (i *InternalAPI) OnGetMerkleRoot(connFD int, corrID uint64, reply func(root []byte, err error)) {
+	if i.coordinator != nil {
+		reply(i.coordinator.GetMerkleRoot(), nil)
+		return
+	}
+	reply(nil, nil)
+}
+
+// OnGossipExchange merges incoming gossip entries into coordinator and returns local entries.
+func (i *InternalAPI) OnGossipExchange(connFD int, corrID uint64, peerID node.NodeID, entries []adapter.GossipEntry, reply func([]adapter.GossipEntry, error)) {
+	if i.coordinator != nil {
+		i.coordinator.OnGossipReceived(peerID, entries)
+		reply(i.coordinator.GetLocalGossipEntries(), nil)
+		return
+	}
+	reply(nil, nil)
+}
+
+// OnNotifyLeaving marks peerID as leaving in the local membership view.
+func (i *InternalAPI) OnNotifyLeaving(connFD int, corrID uint64, peerID node.NodeID, reply func(error)) {
+	if i.membership != nil {
+		i.membership.UpdatePeerStatus(peerID, membership.NodeStatusLeaving)
+	}
+	reply(nil)
+}
+
+// OnClientConnected is invoked when a remote client connects to this server.
+func (i *InternalAPI) OnClientConnected(connFD int, remoteAddr string) {}
+
+// OnClientDisconnected is invoked when a remote client disconnects from this server.
+func (i *InternalAPI) OnClientDisconnected(connFD int, err error) {}
+
 // Replicate writes req.Sibling into local storage under req.Key.
-//
-// TODO(v2): build a storage.SiblingSet around req.Sibling and call
-// i.storage.Put(req.Key, siblingSet) (v1:
-// internal/server/internal_api.go InternalAPI.Replicate).
 func (i *InternalAPI) Replicate(ctx context.Context, req *ReplicateReq) (*ReplicateResp, error) {
 	return nil, contracts.ErrNotImplemented
 }
 
 // Read returns the local sibling set for req.Key.
-//
-// TODO(v2): call i.storage.Get(req.Key) and translate
-// quorumerr.ErrKeyNotFound into Found: false rather than an error (v1:
-// internal/server/internal_api.go InternalAPI.Read).
 func (i *InternalAPI) Read(ctx context.Context, req *InternalReadReq) (*InternalReadResp, error) {
 	return nil, contracts.ErrNotImplemented
 }
 
-// Heartbeat responds to a liveness probe with this node's status and its
-// view of the cluster's peers.
-//
-// TODO(v2): populate ResponderID from i.storage.LocalNodeID(), Status from
-// i.membership.GetLocalStatus(), and Peers from i.membership.GetPeers()
-// (v1: internal/server/internal_api.go InternalAPI.Heartbeat).
+// Heartbeat responds to a liveness probe with this node's status and its view of the cluster's peers.
 func (i *InternalAPI) Heartbeat(ctx context.Context, req *HeartbeatReq) (*HeartbeatResp, error) {
 	return nil, contracts.ErrNotImplemented
 }
 
 // NotifyLeaving marks req.NodeID as leaving in the local membership view.
-//
-// TODO(v2): call i.membership.UpdatePeerStatus(req.NodeID,
-// membership.NodeStatusLeaving) (v1: internal/server/internal_api.go
-// InternalAPI.NotifyLeaving).
 func (i *InternalAPI) NotifyLeaving(ctx context.Context, req *NotifyLeavingReq) (*NotifyLeavingResp, error) {
 	return nil, contracts.ErrNotImplemented
 }
 
-// GetMerkleRoot returns the coordinator's current anti-entropy Merkle
-// root.
-//
-// TODO(v2): return &GetMerkleRootResp{MerkleRoot: i.coordinator.GetMerkleRoot()}
-// (v1: internal/server/internal_api.go InternalAPI.GetMerkleRoot, which
-// read a merkleRootFn wired in after coordinator.Start()).
+// GetMerkleRoot returns the coordinator's current anti-entropy Merkle root.
 func (i *InternalAPI) GetMerkleRoot(ctx context.Context, req *GetMerkleRootReq) (*GetMerkleRootResp, error) {
+	if i.coordinator != nil {
+		return &GetMerkleRootResp{MerkleRoot: i.coordinator.GetMerkleRoot()}, nil
+	}
 	return nil, contracts.ErrNotImplemented
 }

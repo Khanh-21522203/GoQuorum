@@ -19,19 +19,19 @@ type fakeTransport struct {
 	err   error
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
+func (f *fakeTransport) RemotePut(id node.NodeID, corrID uint64, key []byte, siblings *adapter.SiblingSet) error {
 	f.calls = append(f.calls, remotePutCall{id: id, key: append([]byte(nil), key...)})
-	done(f.err)
+	return f.err
 }
 
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
-	done(nil, nil)
+func (f *fakeTransport) RemoteGet(id node.NodeID, corrID uint64, key []byte) error {
+	return nil
 }
-func (f *fakeTransport) Heartbeat(id node.NodeID, done func(error))             { done(nil) }
-func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) { done(nil, nil) }
-func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error))         { done(nil) }
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
-	done(nil, nil)
+func (f *fakeTransport) Heartbeat(id node.NodeID, corrID uint64) error     { return nil }
+func (f *fakeTransport) GetMerkleRoot(id node.NodeID, corrID uint64) error { return nil }
+func (f *fakeTransport) NotifyLeaving(id node.NodeID, corrID uint64) error { return nil }
+func (f *fakeTransport) GossipExchange(id node.NodeID, corrID uint64, entries []adapter.GossipEntry) error {
+	return nil
 }
 func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
 func (f *fakeTransport) Close() error                           { return nil }

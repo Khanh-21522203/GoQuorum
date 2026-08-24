@@ -184,6 +184,11 @@ func dialClientConn(rt *ioruntime.Runtime, bp *pool.BucketArrayPool[byte], r *re
 		c.fail(err)
 		return nil, err
 	}
+	if r != nil {
+		r.RegisterFD(fd, func(ev reactor.Event) {
+			c.HandleCompletion(ev)
+		})
+	}
 	return c, nil
 }
 
@@ -262,6 +267,9 @@ func (c *clientConn) send(msgID uint16, correlationID uint64, body []byte) error
 func (c *clientConn) fail(err error) {
 	if c.closed {
 		return
+	}
+	if c.r != nil {
+		c.r.UnregisterFD(c.fd)
 	}
 	if c.sendSlots != nil {
 		c.sendSlots.ForEach(func(id uint64, s *pool.Slot[[]byte]) {

@@ -133,10 +133,8 @@ func (h *testClientHandler) OnConnectError(id node.NodeID, err error) {
 func TestServerClient_FrameExchange(t *testing.T) {
 	serverEnd := newTestEnd(t)
 	sHandler := &testServerHandler{}
-	server := NewServer(serverEnd.rt, nil, sHandler)
+	server := NewServer(serverEnd.rt, serverEnd.r, nil, sHandler)
 	sHandler.server = server
-
-	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
 	serverEnd.run(t)
 
 	var listenErr error
@@ -202,10 +200,8 @@ func TestServerClient_LifecycleHooks(t *testing.T) {
 			serverConnectErr <- err
 		},
 	}
-	server := NewServer(serverEnd.rt, nil, sHandler)
+	server := NewServer(serverEnd.rt, serverEnd.r, nil, sHandler)
 	sHandler.server = server
-
-	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
 	serverEnd.run(t)
 
 	call(t, serverEnd, func() {
@@ -317,10 +313,8 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 			acceptedFD = connFD
 		},
 	}
-	server := NewServer(serverEnd.rt, nil, sHandler)
+	server := NewServer(serverEnd.rt, serverEnd.r, nil, sHandler)
 	sHandler.server = server
-
-	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
 	serverEnd.run(t)
 
 	call(t, serverEnd, func() {
@@ -374,22 +368,12 @@ func TestServerClient_OnMessage_UnsolicitedPush(t *testing.T) {
 func TestSharedBucketArrayPool_ClientServer(t *testing.T) {
 	sharedPool := pool.NewDefaultArrayPool[byte]()
 
-	serverEnd := newTestEnd(t)
+	end := newTestEnd(t)
 	sHandler := &testServerHandler{}
-	server := NewServer(serverEnd.rt, sharedPool, sHandler)
+	server := NewServer(end.rt, end.r, sharedPool, sHandler)
 	sHandler.server = server
 
-	serverEnd.r.SetEventHandler(func(ev reactor.Event) { server.HandleCompletion(ev) })
-	serverEnd.run(t)
-
-	call(t, serverEnd, func() {
-		if err := server.Listen("127.0.0.1:0"); err != nil {
-			t.Fatalf("Listen: %v", err)
-		}
-	})
-
-	clientEnd := newTestEnd(t)
-	client := NewClient(clientEnd.rt, clientEnd.r, sharedPool, nil)
+	client := NewClient(end.rt, end.r, sharedPool, nil)
 
 	if client.BytePool() != sharedPool {
 		t.Fatalf("client.BytePool() != sharedPool")
@@ -398,18 +382,31 @@ func TestSharedBucketArrayPool_ClientServer(t *testing.T) {
 		t.Fatalf("server.BytePool() != sharedPool")
 	}
 
-	clientEnd.r.SetEventHandler(func(ev reactor.Event) { client.HandleCompletion(ev) })
-	clientEnd.run(t)
+	end.r.SetEventHandler(func(ev reactor.Event) {
+		if client.HandleCompletion(ev) {
+			return
+		}
+		server.HandleCompletion(ev)
+	})
+	end.run(t)
+
+	call(t, end, func() {
+		if err := server.Listen("127.0.0.1:0"); err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+	})
 
 	const peerID node.NodeID = "peer-shared-pool"
-	call(t, clientEnd, func() {
+	call(t, end, func() {
 		if err := client.Dial(peerID, server.Addr()); err != nil {
 			t.Fatalf("Dial: %v", err)
 		}
 	})
 
-	call(t, clientEnd, func() { _ = client.Close() })
-	call(t, serverEnd, func() { _ = server.Close() })
+	call(t, end, func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
 }
 
 func reserveDeadAddr(t *testing.T) string {

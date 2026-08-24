@@ -27,6 +27,7 @@ type ServerHandler interface {
 // Server accepts inbound peer connections and dispatches incoming frames (0 domain knowledge).
 type Server struct {
 	rt       *ioruntime.Runtime
+	r        *reactor.Reactor
 	bytePool *pool.BucketArrayPool[byte]
 	handler  ServerHandler
 
@@ -36,12 +37,13 @@ type Server struct {
 }
 
 // NewServer creates a new io_uring transport Server with an optional shared byte pool.
-func NewServer(rt *ioruntime.Runtime, bytePool *pool.BucketArrayPool[byte], handler ServerHandler) *Server {
+func NewServer(rt *ioruntime.Runtime, r *reactor.Reactor, bytePool *pool.BucketArrayPool[byte], handler ServerHandler) *Server {
 	if bytePool == nil {
 		bytePool = pool.NewDefaultArrayPool[byte]()
 	}
 	return &Server{
 		rt:       rt,
+		r:        r,
 		bytePool: bytePool,
 		handler:  handler,
 		listenFD: -1,
@@ -78,6 +80,11 @@ func (s *Server) Listen(addr string) error {
 
 	s.listenFD = fd
 	s.addr = boundAddr
+	if s.r != nil {
+		s.r.RegisterFD(s.listenFD, func(ev reactor.Event) {
+			s.onAcceptCompletion(ev)
+		})
+	}
 	s.armAccept()
 	return nil
 }
@@ -142,6 +149,11 @@ func (s *Server) onAcceptCompletion(ev reactor.Event) {
 		sendSlots: pool.NewSlotTable[[]byte](1024),
 	}
 	s.conns[connFD] = sc
+	if s.r != nil {
+		s.r.RegisterFD(connFD, func(ev reactor.Event) {
+			sc.handleCompletion(ev)
+		})
+	}
 	if s.handler != nil {
 		s.handler.OnConnected(connFD, remoteAddrStr)
 	}
@@ -153,6 +165,9 @@ func (s *Server) onAcceptCompletion(ev reactor.Event) {
 // Close releases the listening socket and all active connections.
 func (s *Server) Close() error {
 	if s.listenFD >= 0 {
+		if s.r != nil {
+			s.r.UnregisterFD(s.listenFD)
+		}
 		_ = syscall.Close(s.listenFD)
 		s.listenFD = -1
 	}
@@ -235,6 +250,9 @@ func (sc *serverConn) send(msgID uint16, correlationID uint64, body []byte) erro
 func (sc *serverConn) fail(err error) {
 	if sc.closed {
 		return
+	}
+	if sc.server != nil && sc.server.r != nil {
+		sc.server.r.UnregisterFD(sc.fd)
 	}
 	if sc.sendSlots != nil {
 		sc.sendSlots.ForEach(func(id uint64, s *pool.Slot[[]byte]) {

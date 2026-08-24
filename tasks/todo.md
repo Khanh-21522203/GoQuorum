@@ -620,7 +620,96 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
   - `v2/infra/transport/iouring/...`
   - `v2/server/app/...`
 - [x] 3. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
-- [x] 4. Documented results in `tasks/todo.md`.
+## Phase 30 — Split Client & Server Network Adapters with Event Hook Pattern
+
+### Context & Goals
+- Separate network adapters cleanly in `v2/engine/adapter/`:
+  - `ClientAdapter` (Client): Pure outbound client adapter over `iouring.Client` implementing `adapter.ClientTransport`.
+  - `ServerAdapter` (Server): Pure inbound server adapter over `iouring.Server` implementing `iouring.ServerHandler` with typed `ServerInboundHandler` event hooks.
+- Update `Coordinator` to export `GetLocalGossipEntries()` for gossip exchanges and dispose `c.transport.Close()` on `Stop()`.
+- Update `server/api/internal.go` so `InternalAPI` implements `adapter.ServerInboundHandler` routing replica data requests to `Storage` and cluster control requests to `Coordinator`.
+- Update `server/app/server.go` composition root to cleanly compose `StorageAdapter`, `ClientAdapter` (Client), `Coordinator`, `ServerAdapter` (Server), and `InternalAPI`.
+- Implement `config.Load(path string)` in `infra/config` with YAML parsing.
+- Add comprehensive unit and loopback integration tests and verify 100% green pass and 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Renamed `Transport` interface to `ClientTransport` and `TransportAdapter` to `ClientAdapter` across `v2/engine/adapter/client_adapter.go`, `v2/engine/coordinator/`, `v2/engine/antientropy/`, `v2/engine/failuredetector/`, `v2/engine/gossip/`, `v2/engine/handoff/`, `v2/engine/readrepair/`, and `v2/server/app/server.go`.
+- [x] 2. Created `v2/engine/adapter/server_adapter.go` defining `ServerInboundHandler` and `ServerAdapter` with typed event hooks for all 6 domain request types (`OnRemotePut`, `OnRemoteGet`, `OnHeartbeat`, `OnGetMerkleRoot`, `OnGossipExchange`, `OnNotifyLeaving`) and connection lifecycle hooks.
+- [x] 3. Added unit tests for `ServerAdapter` in `v2/engine/adapter/server_adapter_test.go` and `ClientAdapter` in `client_adapter_test.go`.
+- [x] 4. Updated `v2/server/api/internal.go` so `InternalAPI` implements `adapter.ServerInboundHandler` directly routing replica I/O to `Storage` and cluster control to `Coordinator`.
+- [x] 5. Updated `v2/server/app/server.go` composition root to compose `StorageAdapter`, `ClientAdapter` (Client), `Coordinator`, `ServerAdapter` (Server), and `InternalAPI`.
+- [x] 6. Implemented YAML `config.Load()` and `config.Validate()` in `v2/infra/config/config.go` with unit tests in `config_test.go`.
+- [x] 7. Added multi-node loopback integration test `TestServer_TwoNode_ReplicationAndRead` in `v2/server/app/server_test.go` verifying 2-node quorum write, WAL persistence, remote ACK, and quorum read.
+- [x] 8. Ran full workspace test suite with race detector (`go test -count=1 -race goquorum.io/v2/...`), `go vet`, and `go build`, verifying 100% green pass and 0 vet warnings.
+- [x] 9. Documented results in `tasks/todo.md`.
+
+## Phase 31 — Client Adapter Event Hook Pattern Refactoring
+
+### Context & Goals
+- Refactor `ClientAdapter` to use the pure **Event Hook Pattern** for all inbound traffic:
+  - Define `ClientInboundHandler` interface (`OnRemotePutResponse`, `OnRemoteGetResponse`, `OnHeartbeatResponse`, `OnGetMerkleRootResponse`, `OnNotifyLeavingResponse`, `OnGossipExchangeResponse`, `OnPeerConnected`, `OnPeerDisconnected`, `OnPeerConnectError`).
+  - Update `ClientTransport` interface with command methods (`SendRemotePut`, `SendRemoteGet`, `SendHeartbeat`, `SendGetMerkleRoot`, `SendNotifyLeaving`, `SendGossipExchange`, `SetInboundHandler`).
+- Implement `adapter.ClientInboundHandler` on `coordinator.Coordinator` to receive and handle all client inbound event hooks directly.
+- Update `failuredetector`, `gossip`, `handoff`, `readrepair`, and `antientropy` to integrate cleanly with `Coordinator` event handling.
+- Update `server/app/server.go` to register `coord` as `clientAdapter.SetInboundHandler(coord)`.
+- Update and run unit & loopback integration tests to verify 100% green pass and 0 vet warnings with race detector.
+
+### Tasks
+- [x] 1. Define `ClientInboundHandler` and update `ClientTransport` & `ClientAdapter` in `v2/engine/adapter/client_adapter.go`.
+- [x] 2. Update unit tests in `v2/engine/adapter/client_adapter_test.go`.
+- [x] 3. Update `Coordinator` in `v2/engine/coordinator/coordinator.go` and subsystems to implement `ClientInboundHandler`.
+- [x] 4. Update coordinator tests in `v2/engine/coordinator/coordinator_test.go` and other engine packages.
+- [x] 5. Wire `clientAdapter.SetInboundHandler(coord)` in `v2/server/app/server.go`.
+- [x] 6. Run full test suite with `-race` (`go test -count=1 -race goquorum.io/v2/...`), `go vet`, and `go build`.
+- [x] 7. Document results in `tasks/todo.md`.
+
+## Phase 32 — Unified Adapter Handlers (ClientAdapterHandler & ServerAdapterHandler)
+
+### Context & Goals
+- Rename `ClientInboundHandler` -> `ClientAdapterHandler` and `ServerInboundHandler` -> `ServerAdapterHandler`.
+- Elevate server connection lifecycle hooks (`OnClientConnected(connFD, remoteAddr)`, `OnClientDisconnected(connFD, err)`) into `ServerAdapterHandler` for unified symmetry.
+- Update `InternalAPI` in `server/api/internal.go` to implement `ServerAdapterHandler`.
+- Update `Coordinator` in `engine/coordinator/coordinator.go` to implement `ClientAdapterHandler`.
+- Update all adapter and engine tests and verify 100% green pass with race detector.
+
+### Tasks
+- [x] 1. Update `v2/engine/adapter/client_adapter.go` (`ClientAdapterHandler`) and `v2/engine/adapter/server_adapter.go` (`ServerAdapterHandler`).
+- [x] 2. Update `v2/engine/coordinator/coordinator.go` and `v2/server/api/internal.go`.
+- [x] 3. Update unit tests in `v2/engine/adapter/`, `v2/engine/coordinator/`, `v2/server/`.
+- [x] 4. Run full test suite with `-race` (`go test -count=1 -race goquorum.io/v2/...`), `go vet`, and `go build`.
+- [x] 5. Document results in `tasks/todo.md`.
+
+## Phase 33 — Encapsulate ClientAdapter in Coordinator & Remove from Server Struct
+
+### Context & Goals
+- Remove `clientAdapter *adapter.ClientAdapter` from `Server` struct in `server/app/server.go`.
+- Let `Coordinator` fully manage and own its outbound `ClientTransport` (`NewCoordinator` auto-wires handler, `Coordinator.Start()` dials peers from membership, `Coordinator.Stop()` closes transport, `Coordinator.HandleCompletion(ev)` delegates reactor completion demuxing).
+- Verify 100% tests pass with race detector.
+
+### Tasks
+- [x] 1. Update `Coordinator` in `v2/engine/coordinator/coordinator.go` to auto-wire handler, dial peers in `Start()`, and provide `HandleCompletion(ev)`.
+- [x] 2. Clean up `v2/server/app/server.go` to remove `clientAdapter` field and redundant loops.
+- [x] 3. Run full test suite with `-race` (`go test -count=1 -race goquorum.io/v2/...`), `go vet`, and `go build`.
+- [x] 4. Document results in `tasks/todo.md`.
+
+## Phase 34 — O(1) Direct FD Self-Registration Reactor Routing
+
+### Context & Goals
+- Add `RegisterFD(fd int, fn func(Event))` and `UnregisterFD(fd int)` to `infra/reactor/reactor.go`.
+- In `Reactor.Run()`, extract `fd := int(uint32(ev.UserData >> 32))` and dispatch directly in $O(1)$ to `r.fdHandlers[fd]`, with fallback to `r.handler(ev)`.
+- Update `iouring.Client` (`clientConn`), `iouring.Server` (`serverConn` + `listenFD`), and `journal.Store` to self-register their FDs on open and unregister on close.
+- Remove the manual linear cascade demuxer from `server/app/server.go`.
+- Verify full test suite with `-race` across all packages.
+
+### Tasks
+- [x] 1. Implement `RegisterFD` / `UnregisterFD` and $O(1)$ dispatch in `v2/infra/reactor/reactor.go` and unit tests in `reactor_test.go`.
+- [x] 2. Update `v2/infra/transport/iouring/` (`Client`, `Server`, `clientConn`, `serverConn`) to self-register/unregister FDs with the reactor.
+- [x] 3. Update `v2/infra/storage/journal/` (`Store`) to self-register/unregister segment FDs with the reactor using `makeUserData(fd, reqID)`.
+- [x] 4. Remove manual completion demuxing chain from `v2/server/app/server.go` and clean up `Coordinator.HandleCompletion`.
+- [x] 5. Run full workspace test suite with `-race` (`go test -count=1 -race goquorum.io/v2/...`), `go vet`, and `go build`.
+- [x] 6. Document results in `tasks/todo.md`.
+
+
 
 
 

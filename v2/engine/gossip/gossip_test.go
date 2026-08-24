@@ -14,32 +14,26 @@ type fakeTransport struct {
 	exchangeCnt int
 }
 
-func (f *fakeTransport) RemotePut(id node.NodeID, key []byte, siblings *adapter.SiblingSet, done func(error)) {
-	done(nil)
+func (f *fakeTransport) RemotePut(node.NodeID, uint64, []byte, *adapter.SiblingSet) error {
+	return nil
 }
-func (f *fakeTransport) RemoteGet(id node.NodeID, key []byte, done func(*adapter.SiblingSet, error)) {
-	done(nil, nil)
+func (f *fakeTransport) RemoteGet(node.NodeID, uint64, []byte) error {
+	return nil
 }
-func (f *fakeTransport) Heartbeat(id node.NodeID, done func(error)) {
-	done(nil)
+func (f *fakeTransport) Heartbeat(node.NodeID, uint64) error {
+	return nil
 }
-func (f *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
-	done(nil, nil)
+func (f *fakeTransport) GetMerkleRoot(node.NodeID, uint64) error {
+	return nil
 }
-func (f *fakeTransport) NotifyLeaving(id node.NodeID, done func(error)) {
-	done(nil)
+func (f *fakeTransport) NotifyLeaving(node.NodeID, uint64) error {
+	return nil
 }
-func (f *fakeTransport) GossipExchange(id node.NodeID, entries []adapter.GossipEntry, done func([]adapter.GossipEntry, error)) {
+func (f *fakeTransport) GossipExchange(id node.NodeID, corrID uint64, entries []adapter.GossipEntry) error {
 	f.mu.Lock()
 	f.exchangeCnt++
-	fn := f.exchangeFn
 	f.mu.Unlock()
-	if fn == nil {
-		done(nil, nil)
-		return
-	}
-	reply, err := fn(id, entries)
-	done(reply, err)
+	return nil
 }
 func (f *fakeTransport) Dial(id node.NodeID, addr string) error { return nil }
 func (f *fakeTransport) Close() error                           { return nil }
@@ -76,13 +70,5 @@ func TestGossip_Round(t *testing.T) {
 
 	if ft.exchangeCnt != 2 {
 		t.Fatalf("expected 2 exchange calls for 2 peers, got %d", ft.exchangeCnt)
-	}
-
-	handler.mu.Lock()
-	recLen := len(handler.received)
-	handler.mu.Unlock()
-
-	if recLen != 2 {
-		t.Fatalf("expected handler to receive 2 replies, got %d", recLen)
 	}
 }

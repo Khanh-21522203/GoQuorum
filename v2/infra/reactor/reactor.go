@@ -20,6 +20,8 @@ type Reactor struct {
 	source  EventSource
 	handler func(Event)
 
+	fdHandlers map[int]func(Event)
+
 	tasks chan func()
 	stop  chan struct{}
 	done  chan struct{}
@@ -33,16 +35,32 @@ type Reactor struct {
 // Run; Run itself may be called at most once.
 func New(source EventSource) *Reactor {
 	return &Reactor{
-		source: source,
-		tasks:  make(chan func(), taskQueueCapacity),
-		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
-		byID:   make(map[TimerID]*timer),
+		source:     source,
+		tasks:      make(chan func(), taskQueueCapacity),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
+		byID:       make(map[TimerID]*timer),
+		fdHandlers: make(map[int]func(Event)),
 	}
 }
 
-// SetEventHandler registers the callback invoked for every Event the
-// EventSource produces. It must be called before Run and never again.
+// RegisterFD registers a dedicated completion handler for the given file or socket descriptor.
+func (r *Reactor) RegisterFD(fd int, fn func(Event)) {
+	if r.fdHandlers == nil {
+		r.fdHandlers = make(map[int]func(Event))
+	}
+	r.fdHandlers[fd] = fn
+}
+
+// UnregisterFD removes the registered completion handler for fd.
+func (r *Reactor) UnregisterFD(fd int) {
+	if r.fdHandlers != nil {
+		delete(r.fdHandlers, fd)
+	}
+}
+
+// SetEventHandler registers the fallback callback invoked for any Event
+// without an explicit RegisterFD binding.
 func (r *Reactor) SetEventHandler(fn func(Event)) {
 	r.handler = fn
 }
@@ -133,10 +151,21 @@ func (r *Reactor) Run() error {
 			return err
 		}
 		for _, ev := range polled {
-			if r.handler != nil {
-				r.handler(ev)
-			}
+			r.dispatchEvent(ev)
 		}
+	}
+}
+
+func (r *Reactor) dispatchEvent(ev Event) {
+	fd := int(uint32(ev.UserData >> 32))
+	if r.fdHandlers != nil {
+		if h, ok := r.fdHandlers[fd]; ok {
+			h(ev)
+			return
+		}
+	}
+	if r.handler != nil {
+		r.handler(ev)
 	}
 }
 

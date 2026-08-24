@@ -23,13 +23,13 @@ type AntiEntropy struct {
 	nodeID     node.NodeID
 	storage    adapter.Storage
 	ring       *hashring.HashRing
-	transport  adapter.Transport
+	transport  adapter.ClientTransport
 	merkleTree *MerkleTree
 	config     config.AntiEntropyConfig
 }
 
 // NewAntiEntropy creates an anti-entropy runner for the local node.
-func NewAntiEntropy(nodeID node.NodeID, store adapter.Storage, ring *hashring.HashRing, tr adapter.Transport, cfg config.AntiEntropyConfig) *AntiEntropy {
+func NewAntiEntropy(nodeID node.NodeID, store adapter.Storage, ring *hashring.HashRing, tr adapter.ClientTransport, cfg config.AntiEntropyConfig) *AntiEntropy {
 	return &AntiEntropy{
 		nodeID:     nodeID,
 		storage:    store,
@@ -74,13 +74,19 @@ func (ae *AntiEntropy) TriggerWithPeer(nodeID node.NodeID) {
 	if !ae.config.Enabled {
 		return
 	}
+	_ = ae.transport.GetMerkleRoot(nodeID, 0)
+}
+
+// OnMerkleRootResult handles the Merkle root response from peerID.
+func (ae *AntiEntropy) OnMerkleRootResult(nodeID node.NodeID, peerRoot []byte, err error) {
+	if !ae.config.Enabled || err != nil {
+		return
+	}
 	localRoot := ae.merkleTree.GetRoot()
-	ae.transport.GetMerkleRoot(nodeID, func(peerRoot []byte, err error) {
-		if err != nil || bytes.Equal(localRoot, peerRoot) {
-			return
-		}
-		ae.pushAllKeysTo(nodeID, func(error) {})
-	})
+	if bytes.Equal(localRoot, peerRoot) {
+		return
+	}
+	ae.pushAllKeysTo(nodeID, func(error) {})
 }
 
 // SyncWithPeers drains the entire local keyspace to the given peers.
@@ -108,37 +114,10 @@ func (ae *AntiEntropy) SyncWithPeers(peers []node.NodeID, done func(error)) {
 }
 
 func (ae *AntiEntropy) pushAllKeysTo(peer node.NodeID, done func(error)) {
-	pending := 0
-	scanFinished := false
-	settled := false
-	var firstErr error
-
-	maybeFinish := func() {
-		if settled || !scanFinished || pending > 0 {
-			return
-		}
-		settled = true
-		done(firstErr)
-	}
-	recordErr := func(err error) {
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
 	ae.storage.Scan(nil, nil, func(key []byte, siblings *adapter.SiblingSet) bool {
-		pending++
-		ae.transport.RemotePut(peer, key, siblings, func(err error) {
-			recordErr(err)
-			pending--
-			maybeFinish()
-		})
+		_ = ae.transport.RemotePut(peer, 0, key, siblings)
 		return true
-	}, func(err error) {
-		recordErr(err)
-		scanFinished = true
-		maybeFinish()
-	})
+	}, done)
 }
 
 // OnKeyUpdate incrementally folds a write for key into the Merkle tree.

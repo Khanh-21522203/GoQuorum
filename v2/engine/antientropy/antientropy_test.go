@@ -92,24 +92,26 @@ func newFakeTransport() *fakeTransport {
 	return &fakeTransport{roots: make(map[node.NodeID][]byte)}
 }
 
-func (ft *fakeTransport) RemotePut(id node.NodeID, key []byte, _ *adapter.SiblingSet, done func(error)) {
+func (ft *fakeTransport) RemotePut(id node.NodeID, corrID uint64, key []byte, _ *adapter.SiblingSet) error {
 	ft.mu.Lock()
 	ft.puts++
 	err := ft.putErr
 	ft.mu.Unlock()
-	done(err)
+	return err
 }
 
-func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*adapter.SiblingSet, error)) {}
-func (ft *fakeTransport) Heartbeat(node.NodeID, func(error))                              {}
-func (ft *fakeTransport) GetMerkleRoot(id node.NodeID, done func([]byte, error)) {
+func (ft *fakeTransport) RemoteGet(node.NodeID, uint64, []byte) error { return nil }
+func (ft *fakeTransport) Heartbeat(node.NodeID, uint64) error         { return nil }
+func (ft *fakeTransport) GetMerkleRoot(id node.NodeID, corrID uint64) error {
 	ft.mu.Lock()
 	root := ft.roots[id]
 	ft.mu.Unlock()
-	done(root, nil)
+	_ = root
+	return nil
 }
-func (ft *fakeTransport) NotifyLeaving(node.NodeID, func(error)) {}
-func (ft *fakeTransport) GossipExchange(node.NodeID, []adapter.GossipEntry, func([]adapter.GossipEntry, error)) {
+func (ft *fakeTransport) NotifyLeaving(node.NodeID, uint64) error { return nil }
+func (ft *fakeTransport) GossipExchange(node.NodeID, uint64, []adapter.GossipEntry) error {
+	return nil
 }
 func (ft *fakeTransport) Dial(node.NodeID, string) error { return nil }
 func (ft *fakeTransport) Close() error                   { return nil }
@@ -151,8 +153,7 @@ func TestAntiEntropy_TriggerWithPeer_MatchingRoot(t *testing.T) {
 	store.put([]byte("k1"), sibling("n1", 1, []byte("v1")))
 	_ = ae.Build()
 
-	tr.roots["n2"] = ae.GetMerkleRoot()
-	ae.TriggerWithPeer("n2")
+	ae.OnMerkleRootResult("n2", ae.GetMerkleRoot(), nil)
 
 	if tr.puts != 0 {
 		t.Errorf("expected 0 puts when roots match, got %d", tr.puts)
@@ -171,8 +172,8 @@ func TestAntiEntropy_TriggerWithPeer_DivergingRoot(t *testing.T) {
 	store.put([]byte("k1"), sibling("n1", 1, []byte("v1")))
 	_ = ae.Build()
 
-	tr.roots["n2"] = bytes.Repeat([]byte{0xFF}, hashSize)
-	ae.TriggerWithPeer("n2")
+	divergingRoot := bytes.Repeat([]byte{0xFF}, hashSize)
+	ae.OnMerkleRootResult("n2", divergingRoot, nil)
 
 	if tr.puts == 0 {
 		t.Error("expected RemotePut call when roots diverge, got 0")

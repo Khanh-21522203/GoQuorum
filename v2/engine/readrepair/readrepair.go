@@ -18,12 +18,12 @@ type ReplicaRead struct {
 // ReadRepairer probabilistically repairs stale replicas in the background after quorum reads.
 type ReadRepairer struct {
 	nodeID    node.NodeID
-	transport adapter.Transport
+	transport adapter.ClientTransport
 	config    config.ReadRepairConfig
 }
 
 // NewReadRepairer creates a read repairer for the local node.
-func NewReadRepairer(nodeID node.NodeID, tr adapter.Transport, cfg config.ReadRepairConfig) *ReadRepairer {
+func NewReadRepairer(nodeID node.NodeID, tr adapter.ClientTransport, cfg config.ReadRepairConfig) *ReadRepairer {
 	return &ReadRepairer{nodeID: nodeID, transport: tr, config: cfg}
 }
 
@@ -51,7 +51,7 @@ func (rr *ReadRepairer) TriggerRepair(key []byte, merged []adapter.Sibling, resp
 		if !isStale(resp.SiblingSet, merged) {
 			continue
 		}
-		rr.transport.RemotePut(resp.NodeID, key, repaired, func(error) {})
+		_ = rr.transport.RemotePut(resp.NodeID, 0, key, repaired)
 	}
 }
 

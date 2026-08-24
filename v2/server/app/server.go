@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/contracts/wire"
 	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/coordinator"
 	"goquorum.io/v2/engine/hashring"
@@ -48,9 +47,7 @@ type Server struct {
 	reactor *reactor.Reactor
 
 	store         adapter.Storage
-	transport     adapter.Transport
-	iouringClient *iouring.Client
-	iouringServer *iouring.Server
+	serverAdapter *adapter.ServerAdapter
 
 	ring        *hashring.HashRing
 	membership  *membership.MembershipManager
@@ -64,23 +61,6 @@ type Server struct {
 	httpServer *http.Server
 }
 
-type appServerHandler struct {
-	server *iouring.Server
-}
-
-func (h *appServerHandler) OnMessage(connFD int, hdr iouring.FrameHeader, body []byte) {
-	switch wire.MessageID(hdr.MessageID) {
-	case wire.MsgHeartbeatRequest:
-		resp := wire.HeartbeatResponse{Status: wire.StatusOK}
-		respBody, _ := resp.Marshal()
-		_ = h.server.Send(connFD, uint16(wire.MsgHeartbeatResponse), hdr.CorrelationID, respBody)
-	}
-}
-
-func (h *appServerHandler) OnConnected(connFD int, remoteAddr string) {}
-func (h *appServerHandler) OnDisconnected(connFD int, err error)      {}
-func (h *appServerHandler) OnConnectError(err error)                  {}
-
 // New builds the full GoQuorum v2 dependency graph from cfg.
 func New(cfg *config.Config) (*Server, error) {
 	// 1. The single OS thread every engine subsystem below will run on.
@@ -92,7 +72,8 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// 2. Storage port (infra/storage/journal raw WAL adapted to engine/adapter.Storage).
 	rawStore, err := journal.Open(rt, journal.Options{
-		Path: filepath.Join(cfg.Node.DataDir, walFileName),
+		Path:    filepath.Join(cfg.Node.DataDir, walFileName),
+		Reactor: r,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
@@ -117,51 +98,36 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		if m.ID == cfg.Node.NodeID {
 			localHTTPAddr = m.HTTPAddr
+		} else {
+			mm.AddPeer(m.ID, m.Addr, m.HTTPAddr)
 		}
 	}
 	if localHTTPAddr == "" {
 		return nil, fmt.Errorf("node %s not found in cfg.Cluster.Members (needed to know its own internal-RPC listen address)", cfg.Node.NodeID)
 	}
 
-	// 5. Transport port (engine/adapter.TransportAdapter wraps iouring.Client).
+	// 5. Outbound transport port (engine/adapter.ClientAdapter wraps iouring.Client).
 	bytePool := pool.NewDefaultArrayPool[byte]()
 	tc := iouring.NewClient(rt, r, bytePool, nil)
-	trAdapter := adapter.NewTransportAdapter(tc, r)
-	for _, m := range cfg.Cluster.Members {
-		if m.ID == cfg.Node.NodeID {
-			continue
-		}
-		_ = trAdapter.Dial(m.ID, m.HTTPAddr)
-	}
-
-	sHandler := &appServerHandler{}
-	ts := iouring.NewServer(rt, bytePool, sHandler)
-	sHandler.server = ts
-
-	if err := ts.Listen(localHTTPAddr); err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", localHTTPAddr, err)
-	}
-
-	r.SetEventHandler(func(ev reactor.Event) {
-		if trAdapter.HandleCompletion(ev) {
-			return
-		}
-		if ts.HandleCompletion(ev) {
-			return
-		}
-		rawStore.HandleCompletion(ev)
-	})
+	clientAdapter := adapter.NewClientAdapter(tc, r)
 
 	// 6. Coordinator, composed over the storage/transport ports plus the
 	// hash ring, membership view, and reactor.
-	coord := coordinator.NewCoordinator(cfg.Node.NodeID, ring, store, trAdapter, mm, r, cfg.Quorum())
+	coord := coordinator.NewCoordinator(cfg.Node.NodeID, ring, store, clientAdapter, mm, r, cfg.Quorum())
 
 	// 7. Service-API implementations over the coordinator and ports.
 	clientAPI := api.NewClientAPI(coord)
 	adminAPI := api.NewAdminAPI(store, mm, cfg.Node.NodeID, version, time.Now())
 	internalAPI := api.NewInternalAPI(store, mm, coord)
 
-	// 8. Gateway, mounted over the coordinator.
+	// 8. Inbound transport port (engine/adapter.ServerAdapter wraps iouring.Server).
+	ts := iouring.NewServer(rt, r, bytePool, nil)
+	serverAdapter := adapter.NewServerAdapter(ts, internalAPI)
+	if err := serverAdapter.Listen(localHTTPAddr); err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", localHTTPAddr, err)
+	}
+
+	// 9. Gateway, mounted over the coordinator.
 	gw := gatewayhttp.New(coord)
 
 	return &Server{
@@ -169,9 +135,7 @@ func New(cfg *config.Config) (*Server, error) {
 		runtime:       rt,
 		reactor:       r,
 		store:         store,
-		transport:     trAdapter,
-		iouringClient: tc,
-		iouringServer: ts,
+		serverAdapter: serverAdapter,
 		ring:          ring,
 		membership:    mm,
 		coordinator:   coord,
@@ -234,11 +198,8 @@ func (s *Server) Stop() {
 	if s.coordinator != nil {
 		s.coordinator.Stop()
 	}
-	if s.iouringServer != nil {
-		_ = s.iouringServer.Close()
-	}
-	if s.transport != nil {
-		_ = s.transport.Close()
+	if s.serverAdapter != nil {
+		_ = s.serverAdapter.Close()
 	}
 	if s.store != nil {
 		_ = s.store.Close()

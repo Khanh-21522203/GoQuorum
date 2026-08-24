@@ -20,30 +20,30 @@ func newFakeTransport() *fakeTransport {
 	}
 }
 
-func (ft *fakeTransport) Heartbeat(id node.NodeID, done func(error)) {
+func (ft *fakeTransport) Heartbeat(id node.NodeID, corrID uint64) error {
 	ft.calls[id]++
-	done(ft.errs[id])
+	return ft.errs[id]
 }
 
-func (ft *fakeTransport) RemotePut(node.NodeID, []byte, *adapter.SiblingSet, func(error)) {
+func (ft *fakeTransport) RemotePut(node.NodeID, uint64, []byte, *adapter.SiblingSet) error {
 	panic("not used")
 }
-func (ft *fakeTransport) RemoteGet(node.NodeID, []byte, func(*adapter.SiblingSet, error)) {
+func (ft *fakeTransport) RemoteGet(node.NodeID, uint64, []byte) error {
 	panic("not used")
 }
-func (ft *fakeTransport) GetMerkleRoot(node.NodeID, func([]byte, error)) {
+func (ft *fakeTransport) GetMerkleRoot(node.NodeID, uint64) error {
 	panic("not used")
 }
-func (ft *fakeTransport) NotifyLeaving(node.NodeID, func(error)) {
+func (ft *fakeTransport) NotifyLeaving(node.NodeID, uint64) error {
 	panic("not used")
 }
-func (ft *fakeTransport) GossipExchange(node.NodeID, []adapter.GossipEntry, func([]adapter.GossipEntry, error)) {
+func (ft *fakeTransport) GossipExchange(node.NodeID, uint64, []adapter.GossipEntry) error {
 	panic("not used")
 }
 func (ft *fakeTransport) Dial(node.NodeID, string) error { return nil }
 func (ft *fakeTransport) Close() error                   { return nil }
 
-var _ adapter.Transport = (*fakeTransport)(nil)
+var _ adapter.ClientTransport = (*fakeTransport)(nil)
 
 type testProbeHandler struct {
 	results map[node.NodeID]error
@@ -68,9 +68,6 @@ func TestFailureDetector_Probe(t *testing.T) {
 		t.Fatalf("expected 1 heartbeat call per peer, got %v", ft.calls)
 	}
 
-	if handler.results[peer1] != nil {
-		t.Errorf("expected peer1 success, got %v", handler.results[peer1])
-	}
 	if handler.results[peer2] == nil || handler.results[peer2].Error() != "timeout" {
 		t.Errorf("expected peer2 timeout error, got %v", handler.results[peer2])
 	}
@@ -79,6 +76,7 @@ func TestFailureDetector_Probe(t *testing.T) {
 func TestFailureDetector_ProbeOne(t *testing.T) {
 	ft := newFakeTransport()
 	peer := node.NodeID("peer-1")
+	ft.errs[peer] = errors.New("refused")
 	handler := &testProbeHandler{results: make(map[node.NodeID]error)}
 	fd := NewFailureDetector(ft, nil)
 	fd.SetHandler(handler)
@@ -88,7 +86,7 @@ func TestFailureDetector_ProbeOne(t *testing.T) {
 	if ft.calls[peer] != 1 {
 		t.Fatalf("expected 1 call, got %d", ft.calls[peer])
 	}
-	if handler.results[peer] != nil {
-		t.Errorf("expected peer success, got %v", handler.results[peer])
+	if handler.results[peer] == nil || handler.results[peer].Error() != "refused" {
+		t.Errorf("expected peer error, got %v", handler.results[peer])
 	}
 }

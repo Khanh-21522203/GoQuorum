@@ -29,13 +29,13 @@ type GossipConfig struct {
 //	                └── transport.GossipExchange(peer, localEntries)
 //	                      └── On reply ──> handler.OnGossipReceived(peer, reply)
 type Gossip struct {
-	transport adapter.Transport
+	transport adapter.ClientTransport
 	handler   GossipHandler
 	fanOut    int
 }
 
 // NewGossip constructs a Gossip protocol worker.
-func NewGossip(tr adapter.Transport, handler GossipHandler, cfg GossipConfig) *Gossip {
+func NewGossip(tr adapter.ClientTransport, handler GossipHandler, cfg GossipConfig) *Gossip {
 	fanOut := cfg.FanOut
 	if fanOut <= 0 {
 		fanOut = 3
@@ -65,13 +65,6 @@ func (g *Gossip) Round(peers []node.NodeID, localEntries []adapter.GossipEntry) 
 
 	for _, i := range rand.Perm(len(peers))[:fanOut] {
 		peerID := peers[i]
-		g.transport.GossipExchange(peerID, localEntries, func(reply []adapter.GossipEntry, err error) {
-			if err != nil {
-				return
-			}
-			if g.handler != nil {
-				g.handler.OnGossipReceived(peerID, reply)
-			}
-		})
+		_ = g.transport.GossipExchange(peerID, 0, localEntries)
 	}
 }

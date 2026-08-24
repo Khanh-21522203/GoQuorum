@@ -31,12 +31,12 @@ type Hint struct {
 //	                   └── Failure ──> Requeue hint for next replay
 type HintedHandoff struct {
 	hints     map[node.NodeID][]*Hint
-	transport adapter.Transport
+	transport adapter.ClientTransport
 	nodeID    node.NodeID
 }
 
 // NewHintedHandoff creates a hinted-handoff buffer for the local node.
-func NewHintedHandoff(tr adapter.Transport, nodeID node.NodeID) *HintedHandoff {
+func NewHintedHandoff(tr adapter.ClientTransport, nodeID node.NodeID) *HintedHandoff {
 	return &HintedHandoff{
 		hints:     make(map[node.NodeID][]*Hint),
 		transport: tr,
@@ -93,11 +93,9 @@ func (hh *HintedHandoff) Replay(activePeers []node.NodeID) {
 			if now.Sub(h.CreatedAt) > maxHintAge {
 				continue
 			}
-			hh.transport.RemotePut(targetID, h.Key, h.Siblings, func(err error) {
-				if err != nil {
-					hh.hints[targetID] = append(hh.hints[targetID], h)
-				}
-			})
+			if err := hh.transport.RemotePut(targetID, 0, h.Key, h.Siblings); err != nil {
+				hh.hints[targetID] = append(hh.hints[targetID], h)
+			}
 		}
 	}
 }
