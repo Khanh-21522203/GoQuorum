@@ -7,8 +7,8 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 	"goquorum.io/v2/infra/transport/iouring"
 )
 

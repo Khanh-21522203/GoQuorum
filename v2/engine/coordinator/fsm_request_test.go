@@ -8,8 +8,8 @@ import (
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
 	"goquorum.io/v2/engine/adapter"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/readrepair"
+	"goquorum.io/v2/infra/reactor"
 )
 
 func TestWriteRequestFSM_QuorumReachedAndStragglers(t *testing.T) {

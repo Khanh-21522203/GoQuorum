@@ -13,8 +13,8 @@ import (
 	"goquorum.io/v2/engine/handoff"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/membership"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/readrepair"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // PutOptions carries per-request write tuning for a Put.

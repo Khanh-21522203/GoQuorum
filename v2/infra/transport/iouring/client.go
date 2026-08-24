@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	"goquorum.io/v2/contracts/node"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // ClientHandler receives asynchronous network events from Client via static method dispatch.

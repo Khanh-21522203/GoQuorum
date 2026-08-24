@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"syscall"
 
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // ServerHandler receives inbound network events from Server via static method dispatch.

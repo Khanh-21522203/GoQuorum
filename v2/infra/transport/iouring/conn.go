@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"syscall"
 
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // wireSchemaVersion is the framing schema version written into outbound frames.

@@ -32,9 +32,9 @@ import (
 	"syscall"
 
 	"goquorum.io/v2/contracts/quorumerr"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 )
 
 const (

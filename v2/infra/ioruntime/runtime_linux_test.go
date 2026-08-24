@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"goquorum.io/v2/engine/reactor"
+	"goquorum.io/v2/infra/reactor"
 )
 
 func newTestRuntime(t *testing.T) *Runtime {

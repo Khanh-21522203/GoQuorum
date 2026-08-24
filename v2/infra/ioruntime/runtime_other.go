@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts"
-	"goquorum.io/v2/engine/reactor"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // Runtime is unavailable on non-Linux platforms: io_uring is a Linux

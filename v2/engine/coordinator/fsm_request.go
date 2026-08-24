@@ -6,8 +6,8 @@ import (
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/engine/adapter"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/engine/readrepair"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // requestState represents the resolution lifecycle of an in-flight quorum request.

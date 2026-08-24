@@ -602,6 +602,27 @@ exclusivity needs deployment-level isolation (Linux `isolcpus=`/cgroup
 - [x] 4. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
 - [x] 5. Documented results in `tasks/todo.md`.
 
+## Phase 29 — Move Reactor to Infra (`v2/infra/reactor`)
+
+### Context & Goals
+- Move `v2/engine/reactor` to `v2/infra/reactor` to fix the layer inversion where low-level infrastructure packages (`ioruntime`, `storage/journal`, `transport/iouring`) imported `engine/reactor`.
+- Group all execution runtimes and OS polling mechanisms inside `v2/infra/`.
+- Update all import paths across `v2/`.
+- Verify full test suite passing with 0 vet warnings.
+
+### What shipped, real and tested
+- [x] 1. Moved directory `v2/engine/reactor` to `v2/infra/reactor`.
+- [x] 2. Updated all import paths across `v2/` from `goquorum.io/v2/engine/reactor` to `goquorum.io/v2/infra/reactor`:
+  - `v2/engine/adapter/...`
+  - `v2/engine/coordinator/...`
+  - `v2/infra/ioruntime/...`
+  - `v2/infra/storage/journal/...`
+  - `v2/infra/transport/iouring/...`
+  - `v2/server/app/...`
+- [x] 3. Ran full test suite across all workspace packages (`go test -count=1 goquorum.io/v2/...`) and `go vet`, verifying 100% green pass and 0 vet warnings.
+- [x] 4. Documented results in `tasks/todo.md`.
+
+
 
 
 

@@ -10,7 +10,7 @@ import (
 	iouring "github.com/iceber/iouring-go"
 	iouringsyscall "github.com/iceber/iouring-go/syscall"
 
-	"goquorum.io/v2/engine/reactor"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // errNotARequest is returned when a delivered iouring.Result does not also

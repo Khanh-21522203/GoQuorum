@@ -11,7 +11,7 @@ import (
 	"goquorum.io/v2/engine/adapter"
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
-	"goquorum.io/v2/engine/reactor"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // --- reactor test scaffolding (mirrors engine/gossip's test harness) ---

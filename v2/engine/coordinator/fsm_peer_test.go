@@ -10,7 +10,7 @@ import (
 	"goquorum.io/v2/engine/config"
 	"goquorum.io/v2/engine/hashring"
 	"goquorum.io/v2/engine/membership"
-	"goquorum.io/v2/engine/reactor"
+	"goquorum.io/v2/infra/reactor"
 )
 
 func TestPeerFSM_PureIsolation(t *testing.T) {

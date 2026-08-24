@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"goquorum.io/v2/contracts/quorumerr"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/reactor"
 )
 
 func newTestRuntime(t testing.TB) *ioruntime.Runtime {

@@ -10,9 +10,9 @@ import (
 
 	"goquorum.io/v2/contracts/node"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
 	"goquorum.io/v2/infra/pool"
+	"goquorum.io/v2/infra/reactor"
 )
 
 // testEnd bundles a real ioruntime.Runtime with a real reactor.Reactor.

@@ -10,8 +10,8 @@ import (
 	"goquorum.io/v2/contracts/quorumerr"
 	"goquorum.io/v2/contracts/vclock"
 	"goquorum.io/v2/contracts/wire"
-	"goquorum.io/v2/engine/reactor"
 	"goquorum.io/v2/infra/ioruntime"
+	"goquorum.io/v2/infra/reactor"
 	"goquorum.io/v2/infra/transport/iouring"
 )
 
